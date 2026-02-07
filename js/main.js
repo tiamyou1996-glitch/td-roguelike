@@ -1094,7 +1094,7 @@ wx.onTouchEnd(function (e) {
       try { wx.removeStorageSync(SAVE_KEY) } catch (e) {}
       resetGame()
       gameState = 'playing'
-    } else if (hitTest(x, y, titleContinueRect)) {
+    } else if (titleContinueRect && hitTest(x, y, titleContinueRect)) {
       loadGame()
       gameState = 'playing'
     }
@@ -1114,7 +1114,7 @@ function loop(timestamp) {
   if (firstFrame) {
     firstFrame = false
     try {
-      if (wx.getStorageSync(SAVE_KEY)) gameState = 'title'
+      gameState = 'title'
     } catch (e) {}
   }
   updateLayout()
@@ -1252,6 +1252,8 @@ function loop(timestamp) {
 }
 
 function drawTitleScreen(w, h) {
+  let hasSave = false
+  try { hasSave = !!wx.getStorageSync(SAVE_KEY) } catch (e) {}
   ctx.fillStyle = UI.bg
   ctx.fillRect(0, 0, w, h)
   ctx.fillStyle = UI.primary
@@ -1260,11 +1262,11 @@ function drawTitleScreen(w, h) {
   ctx.fillText('塔防 Roguelike', w / 2, h * 0.30)
   ctx.fillStyle = UI.textDim
   ctx.font = '14px sans-serif'
-  ctx.fillText('检测到上次进度，请选择', w / 2, h * 0.38)
+  ctx.fillText(hasSave ? '检测到上次进度，请选择' : '点击下方开始游戏', w / 2, h * 0.38)
   const btnW = 160
   const btnH = 48
   const gap = 24
-  const totalW = btnW * 2 + gap
+  const totalW = hasSave ? btnW * 2 + gap : btnW
   const leftX = (w - totalW) / 2
   const btnY = h * 0.50
   roundRect(leftX, btnY, btnW, btnH, UI.radius)
@@ -1276,17 +1278,21 @@ function drawTitleScreen(w, h) {
   ctx.textBaseline = 'middle'
   ctx.fillStyle = UI.bg
   ctx.font = 'bold 16px sans-serif'
-  ctx.fillText('新游戏', leftX + btnW / 2, btnY + btnH / 2)
+  ctx.fillText(hasSave ? '新游戏' : '开始游戏', leftX + btnW / 2, btnY + btnH / 2)
   titleNewRect = { x: leftX, y: btnY, w: btnW, h: btnH }
-  const contX = leftX + btnW + gap
-  roundRect(contX, btnY, btnW, btnH, UI.radius)
-  ctx.fillStyle = UI.bgCard
-  ctx.fill()
-  ctx.strokeStyle = UI.border
-  ctx.stroke()
-  ctx.fillStyle = UI.text
-  ctx.fillText('继续游戏', contX + btnW / 2, btnY + btnH / 2)
-  titleContinueRect = { x: contX, y: btnY, w: btnW, h: btnH }
+  if (hasSave) {
+    const contX = leftX + btnW + gap
+    roundRect(contX, btnY, btnW, btnH, UI.radius)
+    ctx.fillStyle = UI.bgCard
+    ctx.fill()
+    ctx.strokeStyle = UI.border
+    ctx.stroke()
+    ctx.fillStyle = UI.text
+    ctx.fillText('继续游戏', contX + btnW / 2, btnY + btnH / 2)
+    titleContinueRect = { x: contX, y: btnY, w: btnW, h: btnH }
+  } else {
+    titleContinueRect = null
+  }
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
 }
