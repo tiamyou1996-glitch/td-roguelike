@@ -34,6 +34,52 @@ function roundRect(x, y, w, h, r) {
   ctx.closePath()
 }
 
+// 避头尾：不能出现在行首 / 行末的字符（中文排版）
+const KINSOKU_HEAD = '，。、．！？；：」）】』％）'
+const KINSOKU_TAIL = '「（【『'
+function isKinsokuHead(c) { return c && KINSOKU_HEAD.indexOf(c) >= 0 }
+function isKinsokuTail(c) { return c && KINSOKU_TAIL.indexOf(c) >= 0 }
+
+// 在指定宽度内自动换行绘制文本，多行居中，遵守避头尾；font 需已设置。maxLines 可选
+function fillTextWrapped(text, centerX, startY, maxWidth, lineHeight, maxLines) {
+  if (!text) return
+  const lines = []
+  let rest = text
+  while (rest.length > 0) {
+    if (ctx.measureText(rest).width <= maxWidth) {
+      lines.push(rest)
+      break
+    }
+    let n = 1
+    while (n < rest.length && ctx.measureText(rest.slice(0, n)).width <= maxWidth) n++
+    if (n === 1) n = 1
+    // 避头尾：行末不能是「（【『，行首不能是，。、等
+    while (n > 1 && isKinsokuTail(rest[n - 1])) n--
+    while (n < rest.length && isKinsokuHead(rest[n]) && ctx.measureText(rest.slice(0, n + 1)).width <= maxWidth) n++
+    lines.push(rest.slice(0, n))
+    rest = rest.slice(n)
+  }
+  if (maxLines != null && lines.length > maxLines) {
+    lines.length = maxLines
+    const last = lines[maxLines - 1]
+    if (last.length > 0 && ctx.measureText(last + '…').width > maxWidth) {
+      let trim = last.length
+      while (trim > 0 && ctx.measureText(last.slice(0, trim) + '…').width > maxWidth) trim--
+          lines[maxLines - 1] = (trim > 0 ? last.slice(0, trim) : last.slice(0, 1)) + '…'
+    } else {
+      lines[maxLines - 1] = last + '…'
+    }
+  }
+  const saveAlign = ctx.textAlign
+  const saveBaseline = ctx.textBaseline
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (let i = 0; i < lines.length; i++)
+    ctx.fillText(lines[i], centerX, startY + lineHeight / 2 + i * lineHeight)
+  ctx.textAlign = saveAlign
+  ctx.textBaseline = saveBaseline
+}
+
 // 布局：顶部预留安全区（状态栏/刘海），上半部分为游戏区
 const TOP_SAFE_MARGIN = 48
 const GAME_HEIGHT_RATIO = 0.32
@@ -67,7 +113,7 @@ const CLASSES = {
     strPerLevel: 2,
     agiPerLevel: 1,
     intPerLevel: 0,
-    startSkillIds: [12, 15, 16]
+    startSkillIds: [0, 1, 2]
   }
 }
 const DEFAULT_CLASS = 'fury_warrior'
@@ -77,17 +123,17 @@ const HP_BASE = 200
 const HP_PER_STR = 40
 const REACH_PLAYER_X = 50
 const ENEMY_SPEED = 48
-const ENEMY_MAX_HP = 100
-const ENEMY_HP_PER_WAVE_MUL = 1.55
+const ENEMY_MAX_HP = 100   // 第 1 波小怪基础血量
+const ENEMY_HP_PER_WAVE_MUL = 1.2
 const ENEMY_ATTACK = 1
 const ENEMY_ATTACK_INTERVAL = 1
 const SPAWN_MARGIN = 30
 const GAME_MARGIN_Y = 16
 const MAX_ENEMIES = 64
-const SPAWNS_PER_WAVE = 10
+const SPAWNS_PER_WAVE = 20
 const MAX_WAVE = 20
-const SPAWN_INTERVAL = 0.7
-const WAVE_BREAK_DURATION = 10
+const SPAWN_INTERVAL = 1     // 同波内每只小怪出生间隔（秒）
+const WAVE_BREAK_DURATION = 3   // 本波怪出完后到下一波的间隔（秒）
 const EXP_PER_KILL = 5
 const EXP_BOSS = 20
 const GOLD_PER_KILL = 1
@@ -99,102 +145,172 @@ const MAX_SKILL_SLOTS = 7
 // 技能栏统一尺寸（主界面、选技能界面、替换技能界面一致）
 const SKILL_BAR_SLOT_H = 52
 const SKILL_BAR_SLOT_GAP = 4
-// 主动技能·嗜血：立即造成150%伤害，回复造成伤害的20%生命，随后3秒攻速×1.2，CD 4秒
+// 主动技能数值（嗜血/旋风斩/暴怒）仍用于战斗计算
 const SKILL_XUE_DAMAGE_MUL = 1.5
 const SKILL_XUE_HEAL_PCT = 0.2
 const SKILL_XUE_BUFF_DURATION = 3
 const SKILL_XUE_COOLDOWN = 4
-// 旋风斩：对最多 5 个敌人造成 80% 伤害，CD 与顺劈 buff 时长一致
 const SKILL_XUANFENG_DAMAGE_MUL = 0.8
 const SKILL_XUANFENG_MAX_TARGETS = 5
 const SKILL_XUANFENG_COOLDOWN = 5
-const SHUNPI_BUFF_DURATION = SKILL_XUANFENG_COOLDOWN // 与旋风斩 CD 同步，同为 5s
-const MONSTER_KILL_FOR_XUANFENG_DEVOUR = 50 // 击杀怪数达到此值后，旋风斩被吞噬（不占栏位）
-const RAGE_CONSUMED_FOR_BAONU_DEVOUR = 500 // 累计消耗怒气达到此值后，暴怒被吞噬（不占栏位）
+const SHUNPI_BUFF_DURATION = SKILL_XUANFENG_COOLDOWN
+const MONSTER_KILL_FOR_XUANFENG_DEVOUR = 50
+const RAGE_CONSUMED_FOR_BAONU_DEVOUR = 500
+const COMBAT_SECONDS_FOR_60S_DEVOUR = 60
+const RAGE_GAINED_FOR_LUMANG_DEVOUR = 500   // 鲁莽 id=24
+const RAGE_GAINED_FOR_SIYI_DEVOUR = 1000    // 肆意放纵 id=25
+const ENRAGE_SECONDS_FOR_DEVOUR = 20        // 激怒时间累计 20 秒吞噬（id 28~32）
+const BLEED_DAMAGE_FOR_YUXUE_DEVOUR = 10000 // 浴血之躯 id=27
+const WOUND_DURATION = 6           // 重伤持续 6 秒
+const WOUND_TICK_INTERVAL = 0.2   // 每 0.2 秒跳一次伤害（不按帧均匀摊）
+const WOUND_DAMAGE_PCT = 0.5      // 重伤流血总量 = 触发该次伤害的 50%
+const SKILL_LUMANG_ID = 24
+const LUMANG_BUFF_DURATION = 12
+const LUMANG_COOLDOWN = 90
 const SHUNPI_DAMAGE_MUL = 0.6
 const SHUNPI_EXTRA_TARGETS = 4
 const MAX_EQUIP_SLOTS = 6
-// 副属性：暴击（数值→暴击率）、极速（数值→攻速与 CD）
-// 暴击率 = 暴击/(暴击+CRIT_RATE_DENOM)，如 100 暴击=50% 率；25 暴击≈20% 率
 const CRIT_DAMAGE_MUL = 2
 const CRIT_RATE_DENOM = 100
 const HASTE_PCT_DENOM = 100
-const MAX_LEARNED_SKILLS = 16
-// 战士职业怒气（如狂暴战，CLASSES[x].hasRage）：上限 100，造成伤害获得、受到伤害获得，后续可消耗
 const RAGE_MAX = 100
 const RAGE_PER_DAMAGE = 5
 const RAGE_ON_CRIT = 5
-// RAGE_PER_HIT_TAKEN：部分战士可配置「受到攻击获得怒气」，当前未用
-const RAGE_XUE_BONUS = 10 // 嗜血释放时额外获得
-// 暴怒：消耗 100 怒气，伤害 = (力量×10 + 攻击力)×280%，无 CD，可触发顺劈
-const SKILL_BAONU_ID = 16
+const RAGE_XUE_BONUS = 8
 const SKILL_BAONU_RAGE_COST = 100
-const SKILL_BAONU_STR_FACTOR = 10   // 力量参与倍率
-const SKILL_BAONU_PCT = 2.8         // 280%
+const SKILL_BAONU_STR_FACTOR = 10
+const SKILL_BAONU_PCT = 2.8
 
-// 基础技能池（前 12 与 wasm-game 一致；13 嗜血；14、15 暴击/极速被动；16 旋风斩；17 暴怒）
-const SKILL_XUE_ID = 12
-const SKILL_XUANFENG_ID = 15
-const BASE_SKILL_COUNT = 17
-const SKILL_POOL = [
-  { name: '强力一击', attackMul: 1.5, speedMul: 1.0 },
-  { name: '攻速提升', attackMul: 1.0, speedMul: 1.4 },
-  { name: '双倍打击', attackMul: 2.0, speedMul: 0.8 },
-  { name: '锋芒', attackMul: 1.3, speedMul: 1.0 },
-  { name: '连击', attackMul: 1.0, speedMul: 1.6 },
-  { name: '重击', attackMul: 2.2, speedMul: 0.7 },
-  { name: '轻刃', attackMul: 0.8, speedMul: 1.8 },
-  { name: '破甲', attackMul: 1.6, speedMul: 1.0 },
-  { name: '疾风', attackMul: 1.0, speedMul: 1.5 },
-  { name: '致命', attackMul: 1.8, speedMul: 0.9 },
-  { name: '均衡', attackMul: 1.2, speedMul: 1.2 },
-  { name: '狂暴', attackMul: 1.4, speedMul: 1.3 },
-  { name: '嗜血', attackMul: 1.0, speedMul: 1.0, isActive: true },
-  { name: '暴击专精', attackMul: 1.0, speedMul: 1.0, critValueBonus: 25 },
-  { name: '极速专精', attackMul: 1.0, speedMul: 1.0, hasteBonus: 20 },
-  { name: '旋风斩', attackMul: 1.0, speedMul: 1.0, isActive: true },
-  { name: '暴怒', attackMul: 1.0, speedMul: 1.0, isActive: true }
+// 新技能表 id：0~2 初始，3~7 基础，8+ 进阶（与 技能整理 表对应）
+const SKILL_XUE_ID = 3
+const SKILL_NUJI_ID = 4
+const SKILL_BAONU_ID = 5
+const SKILL_XUANFENG_ID = 6
+const SKILL_ZHANSHA_ID = 7
+const SKILL_NUJI_DAMAGE_MUL = 1.3
+const SKILL_NUJI_RAGE = 12
+const SKILL_NUJI_COOLDOWN = 7
+const SKILL_ZHANSHA_DAMAGE_MUL = 2.0
+const SKILL_ZHANSHA_COOLDOWN = 5
+const SKILL_ZHANSHA_CD_REDUCE = 1.5
+const NUJI_RESET_BUFF_DURATION = 3
+const INITIAL_SKILL_IDS = [0, 1, 2]
+const BASE_SKILL_IDS = [3, 4, 5, 6, 7]
+// 吞噬类型对应的技能 id（用于统一判断）
+const DEVOUR_OBTAIN_NOW_IDS = [33, 34, 35]           // 获得即吞噬：狂怒回复、狂怒提振、生死决战
+const DEVOUR_60S_COMBAT_IDS = [6, 7, 26, 40]        // 60 秒战斗时间：旋风斩、斩杀、重伤、奥丁之怒
+const DEVOUR_RAGE_GAINED_IDS = [24, 25]              // 累计获得怒气：鲁莽 500、肆意放纵 1000
+const DEVOUR_ENRAGE_20S_IDS = [28, 29, 30, 31, 32]  // 激怒时间 20 秒：狂乱之怒等
+const DEVOUR_BLEED_10000_ID = 27                     // 浴血之躯：累计流血伤害 10000
+// 前期低概率、随波次增高出现：鲁莽、奥丁之怒、狂怒回复(33)；34/35 由前置技能控制出现
+const LATE_GAME_SKILL_IDS = [24, 33, 40]
+const LATE_GAME_CHANCE_MIN = 0.2                    // 第 1 波时进入候选的概率 20%
+const LATE_GAME_PROGRESS_WAVES = 10                 // 多少波后达到 100%
+
+// 全技能表（id 即下标）：name, category, type, desc, synergyName, devourCondition, attackMul, speedMul, isActive
+const ALL_SKILLS = [
+  { id: 0, name: '狂暴姿态', category: '初始', type: '被动', desc: '使你的自动攻击伤害提高15%，受到伤害提高10%', synergyName: '双持狂战士', devourCondition: '集齐狂暴姿态、激怒状态（精通）、泰坦之握', attackMul: 1.15, speedMul: 1.0 },
+  { id: 1, name: '激怒状态', category: '初始', type: '被动', desc: '你在激怒状态下造成的伤害提高15%，精通提高15%，吸血提高3%，持续4秒', synergyName: '双持狂战士', devourCondition: '集齐狂暴姿态、激怒状态（精通）、泰坦之握', attackMul: 1.0, speedMul: 1.0 },
+  { id: 2, name: '双武器', category: '初始', type: '被动', desc: '伤害提高10%', synergyName: '双持狂战士', devourCondition: '集齐狂暴姿态、激怒状态（精通）、泰坦之握', attackMul: 1.1, speedMul: 1.0 },
+  { id: 3, name: '嗜血', category: '基础', type: '主动', desc: '主动：对当前目标造成150%攻击力伤害，并回复造成伤害的20%生命；随后3秒内攻速提升至1.2倍。战士释放时额外获得8怒气。冷却4秒，有目标时自动释放。有30%几率进入激怒状态', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 4, name: '怒击', category: '基础', type: '主动', desc: '一次强力的打击，一共造成130%攻击力伤害，产生12点怒气，7s冷却时间', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 5, name: '暴怒', category: '基础', type: '主动', desc: '主动：消耗100怒气，造成（力量×10+攻击力）×280%伤害（可暴击），无冷却。怒气≥100且有目标时自动释放。可触发顺劈。累计消耗怒气达500后可吞噬（不占栏位）。进入激怒状态', synergyName: '愤怒化身', devourCondition: '累计消耗怒气达500后吞噬（不占栏位）', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 6, name: '旋风斩', category: '基础', type: '主动', desc: '主动：对攻击范围内最多5个敌人各造成80%攻击力伤害（可暴击）。冷却5秒。使用后5秒内进入顺劈：嗜血或暴怒对主目标造成伤害时，主目标外最多4个敌人额外受到60%顺劈伤害。击杀怪数达50后可吞噬（不占栏位）。', synergyName: '旋风斩', devourCondition: '60秒后自动吞噬', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 7, name: '斩杀', category: '基础', type: '被动', desc: '攻击时有20%的概率触发，造成200%攻击力伤害，5s冷却时间', synergyName: '斩杀', devourCondition: '60秒后自动吞噬', attackMul: 1.0, speedMul: 1.0 },
+  { id: 8, name: '猝死', category: '进阶', type: '被动', desc: '斩杀的触发概率增加10%，伤害提高50%', synergyName: '斩杀', devourCondition: '集齐猝死、强化斩杀、毁灭', attackMul: 1.0, speedMul: 1.0, prerequisite: 7 },
+  { id: 9, name: '强化斩杀', category: '进阶', type: '被动', desc: '斩杀会产生20点怒气值', synergyName: '斩杀', devourCondition: '集齐猝死、强化斩杀、毁灭', attackMul: 1.0, speedMul: 1.0, prerequisite: 7 },
+  { id: 10, name: '毁灭', category: '进阶', type: '被动', desc: '斩杀现在伤害提高100%，冷却时间缩短1.5秒', synergyName: '斩杀', devourCondition: '集齐猝死、强化斩杀、毁灭', attackMul: 1.0, speedMul: 1.0, prerequisite: 7 },
+  { id: 11, name: '强化旋风斩', category: '进阶', type: '被动', desc: '旋风斩会产生3点怒气，每击中一个目标会额外产生1点怒气值，最大8点', synergyName: '旋风斩', devourCondition: '集齐强化旋风斩、血肉顺劈', attackMul: 1.0, speedMul: 1.0, prerequisite: 6 },
+  { id: 12, name: '血肉顺劈', category: '进阶', type: '被动', desc: '旋风斩和雷霆一击伤害提高50%', synergyName: '旋风斩', devourCondition: '集齐强化旋风斩、血肉顺劈', attackMul: 1.0, speedMul: 1.0, prerequisite: 6 },
+  { id: 13, name: '新鲜血肉', category: '进阶', type: '被动', desc: '嗜血触发激怒的几率翻倍', synergyName: '嗜血', devourCondition: '集齐新鲜血肉、寒光热血、血腥疯狂、恶毒瞥视', attackMul: 1.0, speedMul: 1.0, prerequisite: 3 },
+  { id: 14, name: '寒光热血', category: '进阶', type: '被动', desc: '嗜血额外产生4点怒气，额外回复10%的生命值', synergyName: '嗜血', devourCondition: '集齐新鲜血肉、寒光热血、血腥疯狂、恶毒瞥视', attackMul: 1.0, speedMul: 1.0, prerequisite: 3 },
+  { id: 15, name: '血腥疯狂', category: '进阶', type: '被动', desc: '怒击和嗜血的伤害提高5%', synergyName: '嗜血', devourCondition: '集齐新鲜血肉、寒光热血、血腥疯狂、恶毒瞥视', attackMul: 1.0, speedMul: 1.0, prerequisite: 3 },
+  { id: 16, name: '恶毒瞥视', category: '进阶', type: '被动', desc: '嗜血对低于50%血的敌人伤害提高25%', synergyName: '嗜血', devourCondition: '集齐新鲜血肉、寒光热血、血腥疯狂、恶毒瞥视', attackMul: 1.0, speedMul: 1.0, prerequisite: 3 },
+  { id: 17, name: '强化怒击', category: '进阶', type: '被动', desc: '怒击有25%的几率立即重置自身的冷却时间', synergyName: '怒击', devourCondition: '集齐强化怒击、敌意、酌饮怒火', attackMul: 1.0, speedMul: 1.0, prerequisite: 4 },
+  { id: 18, name: '敌意', category: '进阶', type: '被动', desc: '嗜血和怒击的伤害提高8%，暴击伤害提高8%', synergyName: '怒击', devourCondition: '集齐强化怒击、敌意、酌饮怒火', attackMul: 1.0, speedMul: 1.0, prerequisite: 4 },
+  { id: 19, name: '酌饮怒火', category: '进阶', type: '被动', desc: '怒击伤害提高10%', synergyName: '怒击', devourCondition: '集齐强化怒击、敌意、酌饮怒火', attackMul: 1.0, speedMul: 1.0, prerequisite: 4 },
+  { id: 20, name: '劈斩', category: '进阶2', type: '被动', desc: '嗜血和暴怒有25%的几率重置怒击的冷却时间', synergyName: '怒击2', devourCondition: '集齐劈斩、愤与怒、暴虐成性、蛮力爆发', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '怒击' },
+  { id: 21, name: '愤与怒', category: '进阶2', type: '被动', desc: '怒击的伤害提高15%，怒击重置自身冷却时间的概率增加10%', synergyName: '怒击2', devourCondition: '集齐劈斩、愤与怒、暴虐成性、蛮力爆发', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '怒击' },
+  { id: 22, name: '暴虐成性', category: '进阶2', type: '被动', desc: '怒击的暴击几率提高10%，暴击伤害提高10%', synergyName: '怒击2', devourCondition: '集齐劈斩、愤与怒、暴虐成性、蛮力爆发', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '怒击' },
+  { id: 23, name: '蛮力爆发', category: '进阶2', type: '被动', desc: '当怒击重置冷却时间时，自动攻击伤害和攻击速度提高30%，持续3秒', synergyName: '怒击2', devourCondition: '集齐劈斩、愤与怒、暴虐成性、蛮力爆发', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '怒击' },
+  { id: 24, name: '鲁莽', category: '进阶', type: '主动', desc: '所有产生的怒气提高50%，暴击几率提高20%，持续12秒，冷却时间90秒', synergyName: '鲁莽', devourCondition: '获得500点怒气吞噬', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 25, name: '肆意放纵', category: '进阶2', type: '被动', desc: '使用鲁莽时，产生50点怒气，鲁莽持续时间内，怒击伤害提高20%，嗜血伤害提高20%', synergyName: '鲁莽', devourCondition: '获得1000点怒气吞噬', attackMul: 1.0, speedMul: 1.0, prerequisite: 24 },
+  { id: 26, name: '重伤', category: '进阶', type: '被动', desc: '受到重伤的目标在6秒内受到造成该次伤害50%的流血（每0.2秒跳一次），若刷新则剩余伤害并入新效果。所有主动技能命中都会施加重伤', synergyName: '流血', devourCondition: '60s后吞噬', attackMul: 1.0, speedMul: 1.0 },
+  { id: 27, name: '浴血之躯', category: '进阶2', type: '被动', desc: '你的流血伤害提高20%', synergyName: '流血', devourCondition: '累计流血伤害达到10000', attackMul: 1.0, speedMul: 1.0, prerequisite: 26 },
+  { id: 28, name: '狂乱之怒', category: '进阶', type: '被动', desc: '激怒使你的急速提高15%', synergyName: '激怒', devourCondition: '激怒时间20秒', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '愤怒化身' },
+  { id: 29, name: '怒意生威', category: '进阶', type: '被动', desc: '激怒使你的精通提高15%，吸血提高3%', synergyName: '激怒', devourCondition: '激怒时间20秒', attackMul: 1.0, speedMul: 1.0 },
+  { id: 30, name: '混沌专注', category: '进阶', type: '被动', desc: '激怒状态下你的自动攻击伤害提高10%', synergyName: '激怒', devourCondition: '激怒时间20秒', attackMul: 1.0, speedMul: 1.0 },
+  { id: 31, name: '战争印记', category: '进阶', type: '被动', desc: '激怒时，收到的伤害降低10%', synergyName: '激怒', devourCondition: '激怒时间20秒', attackMul: 1.0, speedMul: 1.0 },
+  { id: 32, name: '残酷', category: '进阶', type: '被动', desc: '激怒时，嗜血和怒击的伤害提高10%', synergyName: '激怒', devourCondition: '激怒时间20秒', attackMul: 1.0, speedMul: 1.0 },
+  { id: 33, name: '狂怒回复', category: '进阶', type: '被动', desc: '30%以下时，嗜血回复生命提高20%', synergyName: '回复', devourCondition: '获得即吞噬', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '愤怒化身' },
+  { id: 34, name: '狂怒提振', category: '进阶2', type: '被动', desc: '狂怒回复的血量判断提高到50%', synergyName: '回复', devourCondition: '获得即吞噬', attackMul: 1.0, speedMul: 1.0, prerequisite: 33 },
+  { id: 35, name: '生死决战', category: '进阶3', type: '被动', desc: '当你死亡时，立即复活你，生命值恢复到50%。一局游戏只能触发一次', synergyName: '回复', devourCondition: '获得即吞噬', attackMul: 1.0, speedMul: 1.0, prerequisite: 34 },
+  { id: 36, name: '血之气息', category: '进阶', type: '被动', desc: '嗜血和暴怒的伤害提高10%', synergyName: '暴怒', devourCondition: '集齐血之气息、处决者的愤怒', attackMul: 1.0, speedMul: 1.0, prerequisite: 5 },
+  { id: 37, name: '处决者的愤怒', category: '进阶', type: '被动', desc: '斩杀额外产生5点怒气，暴怒的伤害提高10%', synergyName: '暴怒', devourCondition: '集齐血之气息、处决者的愤怒', attackMul: 1.0, speedMul: 1.0, prerequisite: 5 },
+  { id: 38, name: '暴怒毁灭', category: '进阶', type: '被动', desc: '暴怒还会对攻击范围内的所有目标造成80%的伤害', synergyName: '暴怒', devourCondition: '集齐暴怒毁灭、狂乱', attackMul: 1.0, speedMul: 1.0, prerequisiteSynergy: '暴怒' },
+  { id: 39, name: '狂乱', category: '进阶', type: '被动', desc: '暴怒使你的急速提高2%，持续12秒，多次释放急速可以叠加，但是持续时间不叠加', synergyName: '暴怒', devourCondition: '集齐暴怒毁灭、狂乱', attackMul: 1.0, speedMul: 1.0 },
+  { id: 40, name: '奥丁之怒', category: '进阶', type: '主动', desc: '对攻击范围内的所有单位，造成200%的伤害，并且造成200%的流血伤害，产生20点怒气，进入激怒状态。冷却时间30秒', synergyName: '奥丁之怒', devourCondition: '60s后吞噬', attackMul: 1.0, speedMul: 1.0, isActive: true }
 ]
 
-// 套装（吞噬）：名称、需求技能 id、需求描述、效果描述、攻击倍率、极速加成（原攻速已改为极速）
-const SYNERGIES = [
-  { name: '刺客', req: [0, 3], requirement: '强力一击, 锋芒', effect: '攻击+15%, 极速+10', attackMul: 1.15, hasteBonus: 10 },
-  { name: '战士', req: [0, 5], requirement: '强力一击, 重击', effect: '攻击+20%', attackMul: 1.20 },
-  { name: '迅捷', req: [1, 4], requirement: '攻速提升, 连击', effect: '极速+25', attackMul: 1.00, hasteBonus: 25 },
-  { name: '破势', req: [7, 9], requirement: '破甲, 致命', effect: '攻击+15%, 极速+10', attackMul: 1.15, hasteBonus: 10 },
-  { name: '均衡之道', req: [6, 10], requirement: '轻刃, 均衡', effect: '攻击+10%, 极速+20', attackMul: 1.10, hasteBonus: 20 }
+// 吞噬定义：集齐 req 内技能即激活，组成技能不占栏位
+const SYNERGY_DEFS = [
+  { name: '双持狂战士', req: [0, 1, 2] },
+  { name: '愤怒化身', req: [3, 4, 5] },
+  { name: '斩杀', req: [8, 9, 10] },
+  { name: '旋风斩', req: [11, 12] },
+  { name: '嗜血', req: [13, 14, 15, 16] },
+  { name: '怒击', req: [17, 18, 19] },
+  { name: '怒击2', req: [20, 21, 22, 23] },
+  { name: '流血', req: [26, 27] },
+  { name: '激怒', req: [28, 29, 30, 31, 32] },
+  { name: '回复', req: [33, 34, 35] },
+  { name: '暴怒', req: [36, 37] },
+  { name: '暴怒2', req: [38, 39] }
 ]
 
-// 每个基础套装对应一个独立进阶卡池，激活该套装后才会在 3 选 1 中出现该池的卡
+// 进阶池：满足前置后该池技能进入 3 选 1。prerequisite=技能id 表示「学了该技能后」；prerequisiteSynergy=吞噬名 表示「该吞噬激活后」
 const ADVANCED_POOLS = [
-  { name: '刺客', skills: [{ name: '影袭', attackMul: 1.7, speedMul: 1.25 }, { name: '割喉', attackMul: 2.0, speedMul: 1.0 }] },
-  { name: '战士', skills: [{ name: '破军', attackMul: 2.2, speedMul: 0.85 }, { name: '碾压', attackMul: 2.5, speedMul: 0.75 }] },
-  { name: '迅捷', skills: [{ name: '神速', attackMul: 1.0, speedMul: 1.9 }, { name: '残影', attackMul: 1.2, speedMul: 1.7 }] },
-  { name: '破势', skills: [{ name: '裁决', attackMul: 2.3, speedMul: 0.9 }, { name: '崩解', attackMul: 2.0, speedMul: 1.1 }] },
-  { name: '均衡之道', skills: [{ name: '圆融', attackMul: 1.4, speedMul: 1.4 }, { name: '无双', attackMul: 1.6, speedMul: 1.2 }] }
+  { poolName: '斩杀', skillIds: [8, 9, 10], prerequisite: 7 },
+  { poolName: '旋风斩', skillIds: [11, 12], prerequisite: 6 },
+  { poolName: '嗜血', skillIds: [13, 14, 15, 16], prerequisite: 3 },
+  { poolName: '怒击', skillIds: [17, 18, 19], prerequisite: 4 },
+  { poolName: '怒击2', skillIds: [20, 21, 22, 23], prerequisiteSynergy: '怒击' },
+  { poolName: '鲁莽', skillIds: [24] },
+  { poolName: '鲁莽2', skillIds: [25], prerequisite: 24 },
+  { poolName: '流血', skillIds: [26, 27], prerequisite: 3 },
+  { poolName: '激怒', skillIds: [28, 29, 30, 31, 32], prerequisiteSynergy: '愤怒化身' },
+  { poolName: '回复', skillIds: [33], prerequisiteSynergy: '愤怒化身' },
+  { poolName: '回复2', skillIds: [34], prerequisite: 33 },
+  { poolName: '回复3', skillIds: [35], prerequisite: 34 },
+  { poolName: '暴怒', skillIds: [36, 37], prerequisite: 5 },
+  { poolName: '暴怒2', skillIds: [38, 39], prerequisiteSynergy: '暴怒' },
+  { poolName: '奥丁之怒', skillIds: [40] }
 ]
-const ADVANCED_SKILLS_PER_POOL = 2
-const TOTAL_SKILL_COUNT = BASE_SKILL_COUNT + SYNERGIES.length * ADVANCED_SKILLS_PER_POOL
+
+const TOTAL_SKILL_COUNT = ALL_SKILLS.length
 
 function getAllSkills() {
-  const list = SKILL_POOL.slice()
-  for (let i = 0; i < ADVANCED_POOLS.length; i++)
-    for (let j = 0; j < ADVANCED_POOLS[i].skills.length; j++)
-      list.push(ADVANCED_POOLS[i].skills[j])
-  return list
+  return ALL_SKILLS
+}
+
+function getSkillById(skillId) {
+  return (skillId >= 0 && skillId < ALL_SKILLS.length) ? ALL_SKILLS[skillId] : null
 }
 
 function getAdvancedPoolName(skillId) {
-  if (skillId < BASE_SKILL_COUNT) return null
-  const poolIndex = Math.floor((skillId - BASE_SKILL_COUNT) / ADVANCED_SKILLS_PER_POOL)
-  return ADVANCED_POOLS[poolIndex].name
+  if (skillId < 0 || skillId >= ALL_SKILLS.length) return null
+  for (let i = 0; i < ADVANCED_POOLS.length; i++) {
+    const p = ADVANCED_POOLS[i]
+    if (p.skillIds.indexOf(skillId) >= 0) return p.poolName
+  }
+  return null
 }
 
 // 商店商品：名称、价格、描述（生命药水为百分比回复）
 const SHOP_ITEMS = [
   { name: '生命药水', cost: 15, desc: '恢复 15% 最大生命', healPct: 0.15 },
   { name: '攻击药剂', cost: 25, desc: '攻击 +10%（永久）' },
-  { name: '攻速药剂', cost: 25, desc: '攻速 +10%（永久）' },
+  { name: '极速药水', cost: 25, desc: '极速 +10（攻速与CD+10%，永久）' },
   { name: '生命上限', cost: 40, desc: '最大生命 +20（永久）' },
   { name: '大生命药水', cost: 35, desc: '恢复 40% 最大生命', healPct: 0.40 }
 ]
@@ -230,17 +346,27 @@ let playerAttackFlat = 0
 let playerCrit = 0
 let playerHaste = 0
 let playerRage = 0
+let playerMastery = 0   // 精通：1% = 1% 伤害提升
+let playerLifesteal = 0  // 吸血：造成伤害的该比例回血（如 3 表示 3%）
 let timeSinceAttack = 0
 let gameOver = false
 let lastTime = 0
 let killCount = 0
 let monsterKillCount = 0 // 仅统计战斗中击杀的怪数，用于旋风斩吞噬等
 let rageConsumedTotal = 0 // 累计消耗的怒气，用于暴怒吞噬（每次释放暴怒 +100）
+let combatTimeSeconds = 0 // 仅战斗内累计秒数（选技能/商店/波次间隔不计），用于 60 秒吞噬
+let skillCombatTimeLearnedAt = {} // 学到「60秒吞噬」技能时的 combatTimeSeconds，如 { 6: 12.5, 7: 45 }
+let rageGainedTotal = 0 // 全局累计获得的怒气（用于统计）
+let skillRageGainedSinceLearned = {} // 选到鲁莽/肆意放纵后累计获得的怒气，如 { 24: 120, 25: 0 }
+let enrageBuffRemaining = 0 // 激怒状态剩余秒数
+let enrageTimeTotal = 0 // 处于激怒状态的累计秒数，用于激怒 20 秒吞噬
+let skillEnrageTimeLearnedAt = {} // 学到「激怒20秒」技能时的 enrageTimeTotal，如 { 28: 0 }
+let totalBleedDamage = 0 // 累计造成的流血伤害，用于浴血之躯 10000 吞噬
 let playerGold = 0
-const DAMAGE_TYPE_NAMES = { normal: '普攻', xue: '嗜血', xuanfeng: '旋风斩', cleave: '顺劈', baonu: '暴怒' }
-const DAMAGE_TYPE_COLORS = { '普攻': '#3b82f6', '嗜血': '#e8a84a', '旋风斩': '#a78bfa', '顺劈': '#22c55e', '暴怒': '#c2410c' }
-let damageByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0 }
-let hitCountByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0 }
+const DAMAGE_TYPE_NAMES = { normal: '普攻', xue: '嗜血', nuji: '怒击', xuanfeng: '旋风斩', cleave: '顺劈', baonu: '暴怒', baonu_aoe: '暴怒毁灭', zhansha: '斩杀', odin: '奥丁之怒', bleed: '流血' }
+const DAMAGE_TYPE_COLORS = { '普攻': '#3b82f6', '嗜血': '#e8a84a', '怒击': '#d97706', '旋风斩': '#a78bfa', '顺劈': '#22c55e', '暴怒': '#c2410c', '暴怒毁灭': '#9a3412', '斩杀': '#dc2626', '奥丁之怒': '#7c3aed', '流血': '#b91c1c' }
+let damageByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
+let hitCountByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
 let enemies = []
 let timeSinceSpawn = 0
 let wave = 1
@@ -250,6 +376,21 @@ let skillXueCd = 0
 let skillXueBuff = 0
 let skillXuanFengCd = 0
 let skillShunpiBuff = 0
+let skillNuJiCd = 0
+let skillZhanShaCd = 0
+let nuJiResetBuffRemaining = 0
+let skillLumangCd = 0
+let recklessBuffRemaining = 0
+let kuangLuanHasteStacks = 0      // 狂乱(39)：暴怒后极速+2%每层，持续12秒可叠层、时间不刷新
+let kuangLuanBuffRemaining = 0
+const KUANG_LUAN_HASTE_PER_STACK = 2
+const KUANG_LUAN_BUFF_DURATION = 12
+let skillOdinCd = 0               // 奥丁之怒(40) 冷却
+const SKILL_ODIN_COOLDOWN = 30
+const SKILL_ODIN_DAMAGE_MUL = 2
+const SKILL_ODIN_BLEED_PCT = 2    // 200% 攻击力流血（6秒内每0.2s跳，与重伤一致）
+const SKILL_ODIN_RAGE = 20
+let deathReviveUsed = false
 let gameEnded = false
 let gameState = 'playing' // 'title' | 'playing' | 'choosing_skill' | 'choosing_replace_target' | 'choosing_equip_replace' | 'shop'
 let playerLevel = 1
@@ -270,6 +411,11 @@ let equipReplaceSlotRects = []
 let equipReplaceCancelRect = null
 let shopButtonRect = null
 let shopCloseRect = null
+let damageStatsOverlayOpen = false
+let damageStatsButtonRect = null
+let damageStatsCloseRect = null
+let lumangButtonRect = null
+let odinButtonRect = null
 let shopBuyRects = []
 let restartRect = null
 let titleNewRect = null
@@ -312,7 +458,9 @@ function getRageGainMul() {
     const def = equipment_slots[i] != null ? EQUIPMENT_DEFS[equipment_slots[i]] : null
     if (def && def.rageGainPct) pct += def.rageGainPct
   }
-  return 1 + pct / 100
+  let mul = 1 + pct / 100
+  if (recklessBuffRemaining > 0 && isLearned(SKILL_LUMANG_ID)) mul *= 1.5
+  return mul
 }
 
 function tryDropEquipment() {
@@ -357,8 +505,12 @@ function hasRageMechanic() {
 
 function addRage(amount) {
   if (!hasRageMechanic()) return
-  amount *= getRageGainMul()
-  playerRage = Math.min(RAGE_MAX, playerRage + amount)
+  const actual = (amount * getRageGainMul()) | 0
+  if (actual <= 0) return
+  rageGainedTotal += actual
+  if (isLearned(24)) skillRageGainedSinceLearned[24] = (skillRageGainedSinceLearned[24] || 0) + actual
+  if (isLearned(25)) skillRageGainedSinceLearned[25] = (skillRageGainedSinceLearned[25] || 0) + actual
+  playerRage = Math.min(RAGE_MAX, playerRage + actual)
 }
 
 function playSound(name) {
@@ -392,6 +544,14 @@ function saveGame() {
       killCount,
       monsterKillCount,
       rageConsumedTotal,
+      combatTimeSeconds,
+      skillCombatTimeLearnedAt: { ...skillCombatTimeLearnedAt },
+      rageGainedTotal,
+      skillRageGainedSinceLearned: { ...skillRageGainedSinceLearned },
+      enrageBuffRemaining,
+      enrageTimeTotal,
+      skillEnrageTimeLearnedAt: { ...skillEnrageTimeLearnedAt },
+      totalBleedDamage,
       damageByType: { ...damageByType },
       hitCountByType: { ...hitCountByType },
       learned_skill_ids: learned_skill_ids.slice(),
@@ -401,11 +561,14 @@ function saveGame() {
       playerCrit,
       playerHaste,
       playerRage,
+      playerMastery,
+      playerLifesteal,
       gameEnded,
       gameOver,
       enemies: enemies.filter(e => e.alive).map(e => ({
         x: e.x, y: e.y, hp: e.hp, maxHp: e.maxHp, speed: e.speed,
-        attack: e.attack, attackCooldown: e.attackCooldown, isBoss: e.isBoss
+        attack: e.attack, attackCooldown: e.attackCooldown, isBoss: e.isBoss,
+        wound: e.wound ? { remaining: e.wound.remaining, totalRemaining: e.wound.totalRemaining, tickAccumulator: e.wound.tickAccumulator ?? 0 } : undefined
       })),
       skillRefreshChances,
       equipment_slots: equipment_slots.slice(),
@@ -413,7 +576,16 @@ function saveGame() {
       skillXueCd,
       skillXueBuff,
       skillXuanFengCd,
-      skillShunpiBuff
+      skillShunpiBuff,
+      skillNuJiCd,
+      skillZhanShaCd,
+      nuJiResetBuffRemaining,
+      skillLumangCd,
+      recklessBuffRemaining,
+      kuangLuanHasteStacks,
+      kuangLuanBuffRemaining,
+      skillOdinCd,
+      deathReviveUsed
     }
     wx.setStorageSync(SAVE_KEY, JSON.stringify(data))
   } catch (err) {
@@ -445,11 +617,25 @@ function loadGame() {
     killCount = data.killCount || 0
     monsterKillCount = (data.monsterKillCount ?? 0) | 0
     rageConsumedTotal = (data.rageConsumedTotal ?? 0) | 0
+    combatTimeSeconds = (data.combatTimeSeconds ?? 0) | 0
+    skillCombatTimeLearnedAt = (data.skillCombatTimeLearnedAt && typeof data.skillCombatTimeLearnedAt === 'object') ? { ...data.skillCombatTimeLearnedAt } : {}
+    rageGainedTotal = (data.rageGainedTotal ?? 0) | 0
+    skillRageGainedSinceLearned = (data.skillRageGainedSinceLearned && typeof data.skillRageGainedSinceLearned === 'object') ? { ...data.skillRageGainedSinceLearned } : {}
+    enrageBuffRemaining = (data.enrageBuffRemaining ?? 0) | 0
+    enrageTimeTotal = (data.enrageTimeTotal ?? 0) | 0
+    skillEnrageTimeLearnedAt = (data.skillEnrageTimeLearnedAt && typeof data.skillEnrageTimeLearnedAt === 'object') ? { ...data.skillEnrageTimeLearnedAt } : {}
+    totalBleedDamage = (data.totalBleedDamage ?? 0) | 0
+    for (let i = 0; i < learned_skill_ids.length; i++) {
+      const id = learned_skill_ids[i]
+      if (DEVOUR_60S_COMBAT_IDS.indexOf(id) >= 0 && skillCombatTimeLearnedAt[id] == null) skillCombatTimeLearnedAt[id] = 0
+      if (DEVOUR_ENRAGE_20S_IDS.indexOf(id) >= 0 && skillEnrageTimeLearnedAt[id] == null) skillEnrageTimeLearnedAt[id] = 0
+      if ((id === 24 || id === 25) && skillRageGainedSinceLearned[id] == null) skillRageGainedSinceLearned[id] = 0
+    }
     if (data.damageByType && typeof data.damageByType === 'object') {
-      damageByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0, ...data.damageByType }
+      damageByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0, ...data.damageByType }
     }
     if (data.hitCountByType && typeof data.hitCountByType === 'object') {
-      hitCountByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0, ...data.hitCountByType }
+      hitCountByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0, ...data.hitCountByType }
     }
     learned_skill_ids = Array.isArray(data.learned_skill_ids) ? data.learned_skill_ids : []
     playerAttackMul = data.playerAttackMul ?? 1
@@ -458,6 +644,8 @@ function loadGame() {
     playerCrit = data.playerCrit ?? 0
     playerHaste = data.playerHaste ?? 0
     playerRage = Math.min(RAGE_MAX, (data.playerRage ?? 0) | 0)
+    playerMastery = (data.playerMastery ?? 0) | 0
+    playerLifesteal = (data.playerLifesteal ?? 0) | 0
     gameEnded = !!data.gameEnded
     gameOver = !!data.gameOver
     if (Array.isArray(data.enemies) && data.enemies.length > 0) {
@@ -465,7 +653,9 @@ function loadGame() {
         ...e,
         x: (e.x > WORLD_WIDTH ? WORLD_WIDTH - SPAWN_MARGIN : e.x),
         alive: true,
-        attackCooldown: e.attackCooldown || 0
+        attackCooldown: e.attackCooldown || 0,
+        wound: e.wound && typeof e.wound.remaining === 'number' && typeof e.wound.totalRemaining === 'number'
+          ? { remaining: e.wound.remaining, totalRemaining: e.wound.totalRemaining, tickAccumulator: e.wound.tickAccumulator ?? 0 } : undefined
       }))
     } else {
       enemies = []
@@ -483,6 +673,15 @@ function loadGame() {
     skillXueBuff = data.skillXueBuff ?? 0
     skillXuanFengCd = data.skillXuanFengCd ?? 0
     skillShunpiBuff = data.skillShunpiBuff ?? 0
+    skillNuJiCd = data.skillNuJiCd ?? 0
+    skillZhanShaCd = data.skillZhanShaCd ?? 0
+    nuJiResetBuffRemaining = data.nuJiResetBuffRemaining ?? 0
+    skillLumangCd = data.skillLumangCd ?? 0
+    recklessBuffRemaining = data.recklessBuffRemaining ?? 0
+    kuangLuanHasteStacks = (data.kuangLuanHasteStacks ?? 0) | 0
+    kuangLuanBuffRemaining = (data.kuangLuanBuffRemaining ?? 0) | 0
+    skillOdinCd = (data.skillOdinCd ?? 0) | 0
+    deathReviveUsed = !!data.deathReviveUsed
     if (pendingDropEquipmentId != null) gameState = 'choosing_equip_replace'
     else if (gameOver || gameEnded) gameState = 'playing'
   } catch (err) {
@@ -511,20 +710,39 @@ function isLearned(skillId) {
 }
 
 function isSynergyActive(idx) {
-  if (idx < 0 || idx >= SYNERGIES.length) return false
-  const s = SYNERGIES[idx]
+  if (idx < 0 || idx >= SYNERGY_DEFS.length) return false
+  const s = SYNERGY_DEFS[idx]
   for (let i = 0; i < s.req.length; i++)
     if (!isLearned(s.req[i])) return false
   return true
 }
 
 function isSkillConsumedBySynergy(skillId) {
-  if (skillId >= BASE_SKILL_COUNT) return false
-  if (skillId === SKILL_XUANFENG_ID && monsterKillCount >= MONSTER_KILL_FOR_XUANFENG_DEVOUR) return true
+  // 获得即吞噬：选到即不占栏位
+  if (DEVOUR_OBTAIN_NOW_IDS.indexOf(skillId) >= 0) return true
+  // 累计消耗怒气：暴怒 500
   if (skillId === SKILL_BAONU_ID && rageConsumedTotal >= RAGE_CONSUMED_FOR_BAONU_DEVOUR) return true
-  for (let i = 0; i < SYNERGIES.length; i++) {
+  // 50 击杀：旋风斩（保留旧逻辑，与策划「60秒」可并存，满足其一即吞噬）
+  if (skillId === SKILL_XUANFENG_ID && monsterKillCount >= MONSTER_KILL_FOR_XUANFENG_DEVOUR) return true
+  // 60 秒战斗时间吞噬
+  if (DEVOUR_60S_COMBAT_IDS.indexOf(skillId) >= 0 && isLearned(skillId)) {
+    const learnedAt = skillCombatTimeLearnedAt[skillId]
+    if (learnedAt != null && (combatTimeSeconds - learnedAt) >= COMBAT_SECONDS_FOR_60S_DEVOUR) return true
+  }
+  // 累计获得怒气：鲁莽 500、肆意放纵 1000
+  if (skillId === 24 && (skillRageGainedSinceLearned[24] || 0) >= RAGE_GAINED_FOR_LUMANG_DEVOUR) return true
+  if (skillId === 25 && (skillRageGainedSinceLearned[25] || 0) >= RAGE_GAINED_FOR_SIYI_DEVOUR) return true
+  // 激怒时间 20 秒吞噬
+  if (DEVOUR_ENRAGE_20S_IDS.indexOf(skillId) >= 0 && isLearned(skillId)) {
+    const learnedAt = skillEnrageTimeLearnedAt[skillId]
+    if (learnedAt != null && (enrageTimeTotal - learnedAt) >= ENRAGE_SECONDS_FOR_DEVOUR) return true
+  }
+  // 累计流血伤害 10000：浴血之躯
+  if (skillId === DEVOUR_BLEED_10000_ID && totalBleedDamage >= BLEED_DAMAGE_FOR_YUXUE_DEVOUR) return true
+  // 集齐 N 张吞噬
+  for (let i = 0; i < SYNERGY_DEFS.length; i++) {
     if (!isSynergyActive(i)) continue
-    const s = SYNERGIES[i]
+    const s = SYNERGY_DEFS[i]
     for (let j = 0; j < s.req.length; j++)
       if (s.req[j] === skillId) return true
   }
@@ -532,15 +750,25 @@ function isSkillConsumedBySynergy(skillId) {
 }
 
 function advancedPoolUnlocked() {
-  for (let i = 0; i < SYNERGIES.length; i++)
+  for (let i = 0; i < SYNERGY_DEFS.length; i++)
     if (isSynergyActive(i)) return true
   return false
 }
 
+function isAdvancedPoolUnlocked(pool) {
+  if (pool.prerequisite != null) return isLearned(pool.prerequisite)
+  if (pool.prerequisiteSynergy != null) {
+    const idx = SYNERGY_DEFS.findIndex(s => s.name === pool.prerequisiteSynergy)
+    return idx >= 0 && isSynergyActive(idx)
+  }
+  return true
+}
+
 function getUnlockedAdvancedPoolNames() {
   const names = []
-  for (let i = 0; i < SYNERGIES.length; i++)
-    if (isSynergyActive(i)) names.push(ADVANCED_POOLS[i].name)
+  for (let i = 0; i < ADVANCED_POOLS.length; i++) {
+    if (isAdvancedPoolUnlocked(ADVANCED_POOLS[i])) names.push(ADVANCED_POOLS[i].poolName)
+  }
   return names
 }
 
@@ -560,7 +788,7 @@ function getSkillsInSlots() {
     if (isSkillConsumedBySynergy(id)) continue
     const sk = allSkills[id]
     if (!sk) continue
-    const isAdvanced = id >= BASE_SKILL_COUNT
+    const isAdvanced = id > 7
     list.push({
       skillId: id,
       name: sk.name,
@@ -581,18 +809,42 @@ function getSkillIdAtSlot(slotIndex) {
 
 // 该技能所属的吞噬（基础技能可属多个，进阶技能属对应池）
 function getSynergiesForSkill(skillId) {
-  if (skillId >= BASE_SKILL_COUNT) {
+  const sk = getSkillById(skillId)
+  if (!sk) return []
+  if (skillId > 7) {
     const pool = getAdvancedPoolName(skillId)
     return pool ? [pool] : []
   }
   const list = []
-  for (let i = 0; i < SYNERGIES.length; i++)
-    if (SYNERGIES[i].req.includes(skillId)) list.push(SYNERGIES[i].name)
+  for (let i = 0; i < SYNERGY_DEFS.length; i++)
+    if (SYNERGY_DEFS[i].req.includes(skillId)) list.push(SYNERGY_DEFS[i].name)
   return list
+}
+
+// 该技能在选卡界面应显示的吞噬规则文案（达成什么条件后吞噬）
+function getDevourRuleText(skillId) {
+  const sk = getSkillById(skillId)
+  if (sk && sk.devourCondition)
+    return (sk.devourCondition.indexOf('吞噬') >= 0 ? '' : '吞噬条件：') + sk.devourCondition + (sk.devourCondition.indexOf('。') >= 0 ? '' : '。')
+  if (skillId > 7)
+    return '进阶技能，无专属吞噬条件。'
+  const belongTo = getSynergiesForSkill(skillId)
+  if (belongTo.length === 0)
+    return '本技能无吞噬条件。'
+  return '吞噬条件：集齐该吞噬所需技能即激活，组成技能不占栏位。所属吞噬：' + belongTo.join('、')
+}
+
+// 吞噬进度数字显示用：取整并缩短大数，避免一长串小数
+function formatProgressDisplay(current, total) {
+  const c = Math.floor(Number(current))
+  const t = Number(total)
+  if (t >= 10000) return c + '/' + (t / 10000) + '万'
+  return c + '/' + t
 }
 
 // 该技能所属各吞噬的收集进度：[{ name, current, total }]，用于技能栏内展示
 function getSynergyProgressForSkill(skillId) {
+  if (DEVOUR_OBTAIN_NOW_IDS.indexOf(skillId) >= 0) return [] // 获得即吞噬无进度条
   if (skillId === SKILL_XUANFENG_ID) {
     const label = MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀'
     return [{ name: label, current: Math.min(monsterKillCount, MONSTER_KILL_FOR_XUANFENG_DEVOUR), total: MONSTER_KILL_FOR_XUANFENG_DEVOUR }]
@@ -601,18 +853,39 @@ function getSynergyProgressForSkill(skillId) {
     const label = RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气'
     return [{ name: label, current: Math.min(rageConsumedTotal, RAGE_CONSUMED_FOR_BAONU_DEVOUR), total: RAGE_CONSUMED_FOR_BAONU_DEVOUR }]
   }
-  if (skillId >= BASE_SKILL_COUNT) {
+  if (DEVOUR_60S_COMBAT_IDS.indexOf(skillId) >= 0 && isLearned(skillId)) {
+    const learnedAt = skillCombatTimeLearnedAt[skillId] != null ? skillCombatTimeLearnedAt[skillId] : 0
+    const current = Math.min(combatTimeSeconds - learnedAt, COMBAT_SECONDS_FOR_60S_DEVOUR)
+    return [{ name: '60秒战斗', current: Math.max(0, current), total: COMBAT_SECONDS_FOR_60S_DEVOUR }]
+  }
+  if (skillId === 24) {
+    const cur = Math.min(skillRageGainedSinceLearned[24] || 0, RAGE_GAINED_FOR_LUMANG_DEVOUR)
+    return [{ name: '获得怒气', current: cur, total: RAGE_GAINED_FOR_LUMANG_DEVOUR }]
+  }
+  if (skillId === 25) {
+    const cur = Math.min(skillRageGainedSinceLearned[25] || 0, RAGE_GAINED_FOR_SIYI_DEVOUR)
+    return [{ name: '获得怒气', current: cur, total: RAGE_GAINED_FOR_SIYI_DEVOUR }]
+  }
+  if (DEVOUR_ENRAGE_20S_IDS.indexOf(skillId) >= 0 && isLearned(skillId)) {
+    const learnedAt = skillEnrageTimeLearnedAt[skillId] != null ? skillEnrageTimeLearnedAt[skillId] : 0
+    const current = Math.min(enrageTimeTotal - learnedAt, ENRAGE_SECONDS_FOR_DEVOUR)
+    return [{ name: '激怒20秒', current: Math.max(0, current), total: ENRAGE_SECONDS_FOR_DEVOUR }]
+  }
+  if (skillId === DEVOUR_BLEED_10000_ID) {
+    return [{ name: '流血伤害', current: Math.min(totalBleedDamage, BLEED_DAMAGE_FOR_YUXUE_DEVOUR), total: BLEED_DAMAGE_FOR_YUXUE_DEVOUR }]
+  }
+  if (skillId > 7) {
     const pool = getAdvancedPoolName(skillId)
     if (!pool) return []
-    const idx = SYNERGIES.findIndex(s => s.name === pool)
+    const idx = SYNERGY_DEFS.findIndex(s => s.name === pool)
     if (idx < 0) return []
-    const s = SYNERGIES[idx]
+    const s = SYNERGY_DEFS[idx]
     const current = s.req.filter(id => isLearned(id)).length
     return [{ name: pool, current, total: s.req.length }]
   }
   const list = []
-  for (let i = 0; i < SYNERGIES.length; i++) {
-    const s = SYNERGIES[i]
+  for (let i = 0; i < SYNERGY_DEFS.length; i++) {
+    const s = SYNERGY_DEFS[i]
     if (!s.req.includes(skillId)) continue
     const current = s.req.filter(id => isLearned(id)).length
     list.push({ name: s.name, current, total: s.req.length })
@@ -620,15 +893,15 @@ function getSynergyProgressForSkill(skillId) {
   return list
 }
 
-// 若选择技能 id 后能激活的吞噬（仅基础技能参与）
+// 若选择技能 id 后能激活的吞噬（缺一张即激活时）
 function getSynergiesIfChoose(skillId) {
-  if (skillId >= BASE_SKILL_COUNT) return []
+  if (skillId > 7) return []
   const list = []
-  for (let i = 0; i < SYNERGIES.length; i++) {
-    const s = SYNERGIES[i]
+  for (let i = 0; i < SYNERGY_DEFS.length; i++) {
+    const s = SYNERGY_DEFS[i]
     if (!s.req.includes(skillId)) continue
-    const other = s.req.find(r => r !== skillId)
-    if (isLearned(other)) list.push(s.name)
+    const othersLearned = s.req.filter(r => r !== skillId).every(r => isLearned(r))
+    if (othersLearned) list.push(s.name)
   }
   return list
 }
@@ -636,15 +909,16 @@ function getSynergiesIfChoose(skillId) {
 // 每个吞噬的收集情况：{ name, status: 'active'|'lack1'|'none', lackName?, consumedNames? }
 function getSynergyProgress() {
   const result = []
-  for (let i = 0; i < SYNERGIES.length; i++) {
-    const s = SYNERGIES[i]
+  for (let i = 0; i < SYNERGY_DEFS.length; i++) {
+    const s = SYNERGY_DEFS[i]
     const learned = s.req.filter(id => isLearned(id)).length
     if (learned === s.req.length) {
-      const consumedNames = s.req.map(id => (SKILL_POOL[id] && SKILL_POOL[id].name) || ('id' + id))
+      const consumedNames = s.req.map(id => (getSkillById(id) && getSkillById(id).name) || ('id' + id))
       result.push({ name: s.name, status: 'active', consumedNames })
-    } else if (learned === 1) {
+    } else if (learned === s.req.length - 1) {
       const lackId = s.req.find(id => !isLearned(id))
-      result.push({ name: s.name, status: 'lack1', lackName: SKILL_POOL[lackId].name })
+      const sk = getSkillById(lackId)
+      result.push({ name: s.name, status: 'lack1', lackName: sk ? sk.name : ('id' + lackId) })
     } else {
       result.push({ name: s.name, status: 'none' })
     }
@@ -657,6 +931,11 @@ function getStarterSkillIds() {
   return (getHeroClass().startSkillIds || []).slice()
 }
 
+function getLateGameSkillChance() {
+  const progress = Math.min(1, (wave - 1) / LATE_GAME_PROGRESS_WAVES)
+  return LATE_GAME_CHANCE_MIN + (1 - LATE_GAME_CHANCE_MIN) * progress
+}
+
 function fillSkillChoices() {
   const starterIds = getStarterSkillIds()
   const starterNotLearned = starterIds.filter(id => !isLearned(id))
@@ -667,17 +946,27 @@ function fillSkillChoices() {
       const j = Math.floor(Math.random() * (i + 1))
       ;[available[i], available[j]] = [available[j], available[i]]
     }
-    skill_choices = available
-    skill_choice_count = available.length
+    skill_choices = available.slice(0, 3)
+    skill_choice_count = skill_choices.length
     return
   }
-  for (let i = 0; i < SKILL_POOL.length; i++)
-    if (!isLearned(i)) available.push(i)
-  for (let i = 0; i < SYNERGIES.length; i++) {
-    if (!isSynergyActive(i)) continue
-    for (let j = 0; j < ADVANCED_SKILLS_PER_POOL; j++) {
-      const id = BASE_SKILL_COUNT + i * ADVANCED_SKILLS_PER_POOL + j
-      if (!isLearned(id)) available.push(id)
+  for (let i = 0; i < BASE_SKILL_IDS.length; i++) {
+    const id = BASE_SKILL_IDS[i]
+    if (!isLearned(id)) available.push(id)
+  }
+  const lateGameChance = getLateGameSkillChance()
+  for (let i = 0; i < ADVANCED_POOLS.length; i++) {
+    const pool = ADVANCED_POOLS[i]
+    if (!isAdvancedPoolUnlocked(pool)) continue
+    for (let j = 0; j < pool.skillIds.length; j++) {
+      const id = pool.skillIds[j]
+      if (!isLearned(id)) {
+        if (LATE_GAME_SKILL_IDS.indexOf(id) >= 0) {
+          if (Math.random() < lateGameChance) available.push(id)
+        } else {
+          available.push(id)
+        }
+      }
     }
   }
   skill_choices = []
@@ -729,25 +1018,115 @@ function getLearnedHasteBonus() {
 }
 
 function getSynergyHasteBonus() {
-  let sum = 0
-  for (let i = 0; i < SYNERGIES.length; i++)
-    if (isSynergyActive(i) && SYNERGIES[i].hasteBonus) sum += SYNERGIES[i].hasteBonus
-  return sum
+  return 0
 }
 
 function getEffectiveHaste() {
-  return playerHaste + getLearnedHasteBonus() + getSynergyHasteBonus()
+  let sum = playerHaste + getLearnedHasteBonus() + getSynergyHasteBonus()
+  if (enrageBuffRemaining > 0 && isLearned(28)) sum += 15  // 狂乱之怒(28)：激怒时极速+15%
+  if (kuangLuanBuffRemaining > 0 && isLearned(39)) sum += kuangLuanHasteStacks * KUANG_LUAN_HASTE_PER_STACK  // 狂乱(39)：暴怒后极速+2%每层
+  return sum
 }
 
-function getCritChance() {
+function getCritChance(forNuJi) {
+  let chance = 0
   const crit = getEffectiveCrit()
-  if (crit <= 0) return 0
-  return Math.min(1, crit / (crit + CRIT_RATE_DENOM))
+  if (crit > 0) chance = Math.min(1, crit / (crit + CRIT_RATE_DENOM))
+  if (forNuJi && isLearned(22)) chance = Math.min(1, chance + 0.1) // 暴虐成性：怒击暴击几率 +10%
+  if (recklessBuffRemaining > 0 && isLearned(SKILL_LUMANG_ID)) chance = Math.min(1, chance + 0.2)
+  return chance
 }
 
-function applyCrit(damage) {
-  const isCrit = Math.random() < getCritChance()
-  return { damage: isCrit ? damage * CRIT_DAMAGE_MUL : damage, isCrit }
+function getCritDamageMul(forNuJi) {
+  let mul = CRIT_DAMAGE_MUL
+  if (isLearned(18)) mul += 0.08   // 敌意：暴击伤害 +8%
+  if (forNuJi && isLearned(22)) mul += 0.1 // 暴虐成性：怒击暴击伤害 +10%
+  return mul
+}
+
+function applyCrit(damage, forNuJi) {
+  const chance = getCritChance(forNuJi)
+  const isCrit = Math.random() < chance
+  const mul = isCrit ? getCritDamageMul(forNuJi) : 1
+  return { damage: damage * mul, isCrit }
+}
+
+// 精通：最终伤害乘 (1 + 精通%)
+function getEffectiveMastery() {
+  let m = playerMastery
+  if (enrageBuffRemaining > 0 && isLearned(1)) m += 15 // 激怒状态：精通 +15%
+  return m
+}
+
+// 吸血：造成伤害的该比例回血（数值，如 3 表示 3%）
+function getEffectiveLifesteal() {
+  let L = playerLifesteal
+  if (enrageBuffRemaining > 0 && isLearned(1)) L += 3  // 激怒状态：吸血 +3%
+  return L
+}
+
+// 应用精通得到最终伤害（暴击后调用）
+function applyMastery(damage) {
+  const m = getEffectiveMastery()
+  if (m <= 0) return damage
+  return damage * (1 + m / 100)
+}
+
+// 根据造成的伤害按吸血比例回血
+function applyLifestealHeal(damageDealt) {
+  const L = getEffectiveLifesteal()
+  if (L <= 0 || damageDealt <= 0) return
+  playerHp = Math.min(playerMaxHp, playerHp + (damageDealt * L / 100))
+}
+
+// ---------- 阶段六：技能效果接新表（进阶伤害/回复/怒气倍率） ----------
+function getXueDamageMul(target) {
+  let mul = 1.0
+  if (isLearned(15)) mul += 0.05   // 血腥疯狂：怒击和嗜血 +5%
+  if (isLearned(18)) mul += 0.08   // 敌意：嗜血和怒击 +8%
+  if (isLearned(16) && target && target.hp <= target.maxHp * 0.5) mul += 0.25 // 恶毒瞥视：嗜血对低于50%血 +25%
+  if (isLearned(36)) mul += 0.10   // 血之气息：嗜血和暴怒 +10%
+  if (enrageBuffRemaining > 0 && isLearned(32)) mul += 0.10 // 残酷：激怒时嗜血和怒击 +10%
+  if (recklessBuffRemaining > 0 && isLearned(25)) mul += 0.20 // 肆意放纵：鲁莽持续时嗜血 +20%
+  return mul
+}
+
+function getNuJiDamageMul() {
+  let mul = 1.0
+  if (isLearned(15)) mul += 0.05
+  if (isLearned(18)) mul += 0.08
+  if (isLearned(19)) mul += 0.10   // 酌饮怒火：怒击 +10%
+  if (isLearned(21)) mul += 0.15   // 愤与怒：怒击 +15%
+  if (enrageBuffRemaining > 0 && isLearned(32)) mul += 0.10
+  if (recklessBuffRemaining > 0 && isLearned(25)) mul += 0.20 // 肆意放纵：鲁莽持续时怒击 +20%
+  return mul
+}
+
+function getXuanFengDamageMul() {
+  if (isLearned(12)) return 1.5    // 血肉顺劈：旋风斩伤害 +50%
+  return 1.0
+}
+
+function getBaoNuDamageMul() {
+  let mul = 1.0
+  if (isLearned(36)) mul += 0.10   // 血之气息：嗜血和暴怒 +10%
+  if (isLearned(37)) mul += 0.10   // 处决者的愤怒：暴怒 +10%
+  return mul
+}
+
+function getZhanShaProcChance() {
+  return 0.2 + (isLearned(8) ? 0.1 : 0) // 猝死：触发概率 +10%
+}
+
+function getZhanShaDamageMul() {
+  let mul = SKILL_ZHANSHA_DAMAGE_MUL
+  if (isLearned(8)) mul *= 1.5   // 猝死：伤害提高 50%
+  if (isLearned(10)) mul *= 2    // 毁灭：伤害提高 100%
+  return mul
+}
+
+function getZhanShaCooldown() {
+  return Math.max(0.5, SKILL_ZHANSHA_COOLDOWN - (isLearned(10) ? SKILL_ZHANSHA_CD_REDUCE : 0))
 }
 
 function computeAttack() {
@@ -757,11 +1136,12 @@ function computeAttack() {
   let mul = 1.0
   for (let i = 0; i < learned_skill_ids.length; i++) {
     const id = learned_skill_ids[i]
-    if (id >= 0 && id < all.length && !all[id].isActive) mul *= all[id].attackMul
+    if (isSkillConsumedBySynergy(id)) continue
+    if (id >= 0 && id < all.length && !all[id].isActive && all[id].attackMul) mul *= all[id].attackMul
   }
-  for (let i = 0; i < SYNERGIES.length; i++)
-    if (isSynergyActive(i)) mul *= SYNERGIES[i].attackMul
-  return baseAttack * mul * playerAttackMul + playerAttackFlat
+  let ret = baseAttack * mul * playerAttackMul + playerAttackFlat
+  if (nuJiResetBuffRemaining > 0 && isLearned(23)) ret *= 1.3
+  return ret
 }
 
 function computeAttackInterval() {
@@ -770,12 +1150,14 @@ function computeAttackInterval() {
   let mul = 1.0
   for (let i = 0; i < learned_skill_ids.length; i++) {
     const id = learned_skill_ids[i]
-    if (id >= 0 && id < all.length && !all[id].isActive) mul *= all[id].speedMul
+    if (isSkillConsumedBySynergy(id)) continue
+    if (id >= 0 && id < all.length && !all[id].isActive && all[id].speedMul) mul *= all[id].speedMul
   }
   let interval = baseInterval / mul / playerSpeedMul
   if (skillXueBuff > 0) interval /= 1.2
   const effectiveHaste = getEffectiveHaste()
   if (effectiveHaste > 0) interval /= (1 + effectiveHaste / HASTE_PCT_DENOM)
+  if (nuJiResetBuffRemaining > 0 && isLearned(23)) interval /= 1.3
   return interval
 }
 
@@ -783,9 +1165,11 @@ function castSkillXue() {
   if (!isLearned(SKILL_XUE_ID) || skillXueCd > 0 || gameOver || gameEnded) return
   const target = findTarget()
   if (!target) return
-  const critResult = applyCrit(computeAttack() * SKILL_XUE_DAMAGE_MUL)
-  addDamage('xue', critResult.damage)
-  target.hp -= critResult.damage
+  const baseDmg = computeAttack() * SKILL_XUE_DAMAGE_MUL * getXueDamageMul(target)
+  const critResult = applyCrit(baseDmg)
+  const finalDamage = applyMastery(critResult.damage)
+  addDamage('xue', finalDamage)
+  target.hp -= finalDamage
   effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
   if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
   if (target.hp <= 0) {
@@ -799,9 +1183,18 @@ function castSkillXue() {
   } else {
     playSound('hit')
   }
-  playerHp = Math.min(playerMaxHp, playerHp + critResult.damage * SKILL_XUE_HEAL_PCT)
-  addRage(RAGE_XUE_BONUS)
-  applyCleaveDamage(target, critResult.damage)
+  let healPct = SKILL_XUE_HEAL_PCT + (isLearned(14) ? 0.10 : 0) // 寒光热血：额外回复 10%
+  const hpPct = playerHp / playerMaxHp
+  const lowHpThreshold = isLearned(34) ? 0.5 : 0.3  // 狂怒提振(34)：阈值提到50%
+  if ((isLearned(33) || isLearned(34)) && hpPct <= lowHpThreshold) healPct *= 1.2  // 狂怒回复(33)/狂怒提振(34)：低血量时嗜血回复+20%
+  playerHp = Math.min(playerMaxHp, playerHp + finalDamage * healPct)
+  applyLifestealHeal(finalDamage)
+  addRage(RAGE_XUE_BONUS + (isLearned(14) ? 4 : 0)) // 寒光热血：嗜血额外 +4 怒气
+  const enrageChance = isLearned(13) ? 0.6 : 0.3    // 新鲜血肉：嗜血触发激怒几率翻倍
+  if (Math.random() < enrageChance) enrageBuffRemaining = Math.max(enrageBuffRemaining, 4)
+  applyWoundToTarget(target, finalDamage)
+  applyCleaveDamage(target, finalDamage)
+  if (isLearned(20) && Math.random() < 0.25) skillNuJiCd = 0
   effects.push({ type: 'shout', text: '嗜血', x: PLAYER_X, y: playerY, life: 1.1, maxLife: 1.1, stackIndex: getShoutStackIndex() })
   skillXueBuff = SKILL_XUE_BUFF_DURATION
   skillXueCd = SKILL_XUE_COOLDOWN
@@ -812,14 +1205,17 @@ function castSkillXuanFeng() {
   if (!isLearned(SKILL_XUANFENG_ID)) return
   const targets = getEnemiesInRange(SKILL_XUANFENG_MAX_TARGETS)
   if (targets.length === 0) return
-  const baseDmg = computeAttack() * SKILL_XUANFENG_DAMAGE_MUL
+  const baseDmg = computeAttack() * SKILL_XUANFENG_DAMAGE_MUL * getXuanFengDamageMul()
   for (let i = 0; i < targets.length; i++) {
     const target = targets[i]
     const critResult = applyCrit(baseDmg)
-    addDamage('xuanfeng', critResult.damage)
-    target.hp -= critResult.damage
+    const finalDamage = applyMastery(critResult.damage)
+    addDamage('xuanfeng', finalDamage)
+    target.hp -= finalDamage
+    applyLifestealHeal(finalDamage)
     effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
     if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
+    applyWoundToTarget(target, finalDamage)
     if (target.hp <= 0) {
       target.alive = false
       killCount++
@@ -845,10 +1241,12 @@ function castSkillBaoNu() {
   if (!target) return
   playerRage = Math.max(0, playerRage - SKILL_BAONU_RAGE_COST)
   rageConsumedTotal += SKILL_BAONU_RAGE_COST
-  const baseDamage = (playerStr * SKILL_BAONU_STR_FACTOR + computeAttack()) * SKILL_BAONU_PCT
+  const baseDamage = (playerStr * SKILL_BAONU_STR_FACTOR + computeAttack()) * SKILL_BAONU_PCT * getBaoNuDamageMul()
   const critResult = applyCrit(baseDamage)
-  addDamage('baonu', critResult.damage)
-  target.hp -= critResult.damage
+  const finalDamage = applyMastery(critResult.damage)
+  addDamage('baonu', finalDamage)
+  target.hp -= finalDamage
+  applyLifestealHeal(finalDamage)
   effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
   if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
   if (target.hp <= 0) {
@@ -862,8 +1260,74 @@ function castSkillBaoNu() {
   } else {
     playSound('hit')
   }
-  applyCleaveDamage(target, critResult.damage)
+  enrageBuffRemaining = Math.max(enrageBuffRemaining, 4) // 暴怒进入激怒 4 秒
+  applyWoundToTarget(target, finalDamage)
+  applyCleaveDamage(target, finalDamage)
+  if (isLearned(38)) {
+    const baseDamage = (playerStr * SKILL_BAONU_STR_FACTOR + computeAttack()) * SKILL_BAONU_PCT * getBaoNuDamageMul()
+    const aoe80 = applyMastery(baseDamage * 0.8)
+    const allInRange = getEnemiesInRange(SKILL_XUANFENG_MAX_TARGETS)
+    for (let i = 0; i < allInRange.length; i++) {
+      const e = allInRange[i]
+      if (!e.alive) continue
+      addDamage('baonu_aoe', aoe80)
+      e.hp -= aoe80
+      applyLifestealHeal(aoe80)
+      applyWoundToTarget(e, aoe80)
+      effects.push({ x: e.x, y: e.y, type: 'hit', life: 0.15 })
+      if (e.hp <= 0) {
+        e.alive = false
+        killCount++
+        monsterKillCount++
+        playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
+        giveExp(e.isBoss ? EXP_BOSS : EXP_PER_KILL)
+        if (!e.isBoss) tryDropEquipment()
+        playSound('kill')
+      } else {
+        playSound('hit')
+      }
+    }
+  }
+  if (isLearned(39)) {
+    kuangLuanHasteStacks++
+    if (kuangLuanBuffRemaining <= 0) kuangLuanBuffRemaining = KUANG_LUAN_BUFF_DURATION
+  }
+  if (isLearned(20) && Math.random() < 0.25) skillNuJiCd = 0
   effects.push({ type: 'shout', text: '暴怒', x: PLAYER_X, y: playerY, life: 1.1, maxLife: 1.1, stackIndex: getShoutStackIndex() })
+}
+
+function castSkillNuJi() {
+  if (!isLearned(SKILL_NUJI_ID) || skillNuJiCd > 0 || gameOver || gameEnded) return
+  const target = findTarget()
+  if (!target) return
+  const baseDmg = computeAttack() * SKILL_NUJI_DAMAGE_MUL * getNuJiDamageMul()
+  const critResult = applyCrit(baseDmg, true)
+  const finalDamage = applyMastery(critResult.damage)
+  addDamage('nuji', finalDamage)
+  target.hp -= finalDamage
+  applyLifestealHeal(finalDamage)
+  applyWoundToTarget(target, finalDamage)
+  applyCleaveDamage(target, finalDamage)
+  effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
+  if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
+  if (target.hp <= 0) {
+    target.alive = false
+    killCount++
+    monsterKillCount++
+    playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
+    giveExp(target.isBoss ? EXP_BOSS : EXP_PER_KILL)
+    if (!target.isBoss) tryDropEquipment()
+    playSound('kill')
+  } else {
+    playSound('hit')
+  }
+  addRage(SKILL_NUJI_RAGE)
+  skillNuJiCd = SKILL_NUJI_COOLDOWN
+  if (isLearned(17) && Math.random() < 0.25) {
+    skillNuJiCd = 0
+    if (isLearned(23)) nuJiResetBuffRemaining = NUJI_RESET_BUFF_DURATION
+  }
+  effects.push({ type: 'shout', text: '怒击', x: PLAYER_X, y: playerY, life: 1.1, maxLife: 1.1, stackIndex: getShoutStackIndex() })
 }
 
 function getShoutStackIndex() {
@@ -872,7 +1336,98 @@ function getShoutStackIndex() {
   return n
 }
 
-// 顺劈：对主目标外的最多 4 个范围内敌人造成 mainDamage * SHUNPI_DAMAGE_MUL 伤害（不重复暴击）
+function castSkillOdin() {
+  if (gameOver || gameEnded || !isLearned(40) || skillOdinCd > 0) return
+  const targets = getEnemiesInRange(MAX_ENEMIES)
+  if (targets.length === 0) return
+  const baseDmg = computeAttack() * SKILL_ODIN_DAMAGE_MUL
+  const finalDamage = applyMastery(baseDmg)
+  const bleedTotal = computeAttack() * SKILL_ODIN_BLEED_PCT
+  for (let i = 0; i < targets.length; i++) {
+    const e = targets[i]
+    if (!e.alive) continue
+    addDamage('odin', finalDamage)
+    e.hp -= finalDamage
+    applyLifestealHeal(finalDamage)
+    applyWoundToTarget(e, null, bleedTotal)
+    effects.push({ x: e.x, y: e.y, type: 'hit', life: 0.2 })
+    if (e.hp <= 0) {
+      e.alive = false
+      killCount++
+      monsterKillCount++
+      playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
+      giveExp(e.isBoss ? EXP_BOSS : EXP_PER_KILL)
+      if (!e.isBoss) tryDropEquipment()
+      playSound('kill')
+    } else {
+      playSound('hit')
+    }
+  }
+  if (hasRageMechanic()) addRage(SKILL_ODIN_RAGE)
+  enrageBuffRemaining = Math.max(enrageBuffRemaining, 4)
+  skillOdinCd = SKILL_ODIN_COOLDOWN
+  effects.push({ type: 'shout', text: '奥丁之怒', x: PLAYER_X, y: playerY, life: 1.2, maxLife: 1.2, stackIndex: getShoutStackIndex() })
+}
+
+// ---------- 阶段七：重伤/流血 dot ----------
+// damageDealt：造成重伤的该次技能伤害，流血总量 = damageDealt * 50%；customTotal：奥丁等直接指定总量时用
+function applyWoundToTarget(enemy, damageDealt, customTotal) {
+  if (!enemy || !enemy.alive) return
+  let addTotal = 0
+  if (customTotal != null) {
+    addTotal = customTotal
+  } else if (damageDealt != null && isLearned(26)) {
+    addTotal = damageDealt * WOUND_DAMAGE_PCT
+  } else {
+    return
+  }
+  if (addTotal <= 0) return
+  if (enemy.wound) {
+    enemy.wound.totalRemaining += addTotal
+    enemy.wound.remaining = WOUND_DURATION
+    enemy.wound.tickAccumulator = 0
+  } else {
+    enemy.wound = { remaining: WOUND_DURATION, totalRemaining: addTotal, tickAccumulator: 0 }
+  }
+}
+
+function tickWound(dt) {
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i]
+    if (!e.alive || !e.wound || e.wound.remaining <= 0 || e.wound.totalRemaining <= 0) continue
+    const w = e.wound
+    if (w.tickAccumulator == null) w.tickAccumulator = 0
+    w.tickAccumulator += dt
+    while (w.tickAccumulator >= WOUND_TICK_INTERVAL && w.remaining > 0 && w.totalRemaining > 0) {
+      const tickDuration = Math.min(WOUND_TICK_INTERVAL, w.remaining)
+      const dmgRaw = w.totalRemaining * (tickDuration / w.remaining)
+      const dmg = isLearned(27) ? dmgRaw * 1.2 : dmgRaw
+      w.totalRemaining -= dmgRaw
+      w.remaining -= tickDuration
+      w.tickAccumulator -= WOUND_TICK_INTERVAL
+      if (dmg > 0) {
+        totalBleedDamage += dmg
+        damageByType.bleed = (damageByType.bleed || 0) + dmg
+        e.hp -= dmg
+        applyLifestealHeal(dmg)
+        if (e.hp <= 0) {
+          e.alive = false
+          killCount++
+          monsterKillCount++
+          playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
+          giveExp(e.isBoss ? EXP_BOSS : EXP_PER_KILL)
+          if (!e.isBoss) tryDropEquipment()
+          playSound('kill')
+          break
+        }
+      }
+      if (w.remaining <= 0 || w.totalRemaining <= 0) break
+    }
+    if (w.remaining <= 0 || w.totalRemaining <= 0) delete e.wound
+  }
+}
+
+// 顺劈：对主目标外的最多 4 个范围内敌人造成 mainDamage * SHUNPI_DAMAGE_MUL 伤害（mainDamage 为已应用精通后的主目标伤害）
 function applyCleaveDamage(mainTarget, mainDamage) {
   if (skillShunpiBuff <= 0) return
   const allInRange = getEnemiesInRange(SKILL_XUANFENG_MAX_TARGETS + SHUNPI_EXTRA_TARGETS)
@@ -882,6 +1437,8 @@ function applyCleaveDamage(mainTarget, mainDamage) {
     const e = others[i]
     addDamage('cleave', cleaveDmg)
     e.hp -= cleaveDmg
+    applyLifestealHeal(cleaveDmg)
+    applyWoundToTarget(e, cleaveDmg)
     effects.push({ x: e.x, y: e.y, type: 'hit', life: 0.15 })
     if (e.hp <= 0) {
       e.alive = false
@@ -925,7 +1482,14 @@ function chooseSkill(index) {
     return
   }
   learned_skill_ids.push(id)
+  recordDevourTimersOnLearn(id)
   gameState = 'playing'
+}
+function recordDevourTimersOnLearn(skillId) {
+  if (DEVOUR_60S_COMBAT_IDS.indexOf(skillId) >= 0) skillCombatTimeLearnedAt[skillId] = combatTimeSeconds
+  if (DEVOUR_ENRAGE_20S_IDS.indexOf(skillId) >= 0) skillEnrageTimeLearnedAt[skillId] = enrageTimeTotal
+  if (skillId === 24) skillRageGainedSinceLearned[24] = 0
+  if (skillId === 25) skillRageGainedSinceLearned[25] = 0
 }
 
 function replaceSkillAtSlot(slotIndex) {
@@ -933,7 +1497,9 @@ function replaceSkillAtSlot(slotIndex) {
   const toRemove = getSkillIdAtSlot(slotIndex)
   if (toRemove == null) return
   learned_skill_ids = learned_skill_ids.filter(sid => sid !== toRemove)
-  learned_skill_ids.push(pendingReplaceSkillId)
+  const id = pendingReplaceSkillId
+  learned_skill_ids.push(id)
+  recordDevourTimersOnLearn(id)
   pendingReplaceSkillId = null
   gameState = 'playing'
 }
@@ -987,14 +1553,24 @@ function resetGame() {
   playerCrit = 0
   playerHaste = 0
   playerRage = 0
+  playerMastery = 0
+  playerLifesteal = 0
   timeSinceAttack = 0
   gameOver = false
   killCount = 0
   monsterKillCount = 0
   rageConsumedTotal = 0
+  combatTimeSeconds = 0
+  skillCombatTimeLearnedAt = {}
+  rageGainedTotal = 0
+  skillRageGainedSinceLearned = {}
+  enrageBuffRemaining = 0
+  enrageTimeTotal = 0
+  skillEnrageTimeLearnedAt = {}
+  totalBleedDamage = 0
   playerGold = 0
-  damageByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0 }
-  hitCountByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0 }
+  damageByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
+  hitCountByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
   enemies = []
   timeSinceSpawn = 0
   wave = 1
@@ -1004,8 +1580,18 @@ function resetGame() {
   skillXueBuff = 0
   skillXuanFengCd = 0
   skillShunpiBuff = 0
+  skillNuJiCd = 0
+  skillZhanShaCd = 0
+  nuJiResetBuffRemaining = 0
+  skillLumangCd = 0
+  recklessBuffRemaining = 0
+  kuangLuanHasteStacks = 0
+  kuangLuanBuffRemaining = 0
+  skillOdinCd = 0
+  deathReviveUsed = false
   gameEnded = false
   gameState = 'playing'
+  damageStatsOverlayOpen = false
   playerLevel = 1
   playerExp = 0
   playerExpToNext = BASE_EXP_TO_NEXT
@@ -1038,7 +1624,7 @@ function buyShopItem(i) {
   } else if (i === 1) {
     playerAttackMul += 0.10
   } else if (i === 2) {
-    playerSpeedMul += 0.10
+    playerHaste += 10
   } else if (i === 3) {
     playerMaxHp += 20
     playerHp += 20
@@ -1051,6 +1637,7 @@ function buyShopItem(i) {
 
 function spawnEnemy() {
   if (gameEnded) return
+  if (spawnsThisWave >= SPAWNS_PER_WAVE) return
   let slot = -1
   for (let i = 0; i < enemies.length; i++) {
     if (!enemies[i].alive) {
@@ -1079,13 +1666,7 @@ function spawnEnemy() {
   if (slot >= 0) enemies[slot] = e
   else enemies.push(e)
   spawnsThisWave++
-  if (spawnsThisWave >= SPAWNS_PER_WAVE) {
-    spawnsThisWave = 0
-    wave++
-    if (wave > MAX_WAVE) gameEnded = true
-    else waveBreakCountdown = WAVE_BREAK_DURATION
-    saveGame()
-  }
+  if (spawnsThisWave >= SPAWNS_PER_WAVE) waveBreakCountdown = WAVE_BREAK_DURATION
 }
 
 function isInAttackRange(ex) {
@@ -1147,8 +1728,27 @@ wx.onTouchEnd(function (e) {
   const x = t.x !== undefined ? t.x : t.clientX
   const y = t.y !== undefined ? t.y : t.clientY
   if (gameState === 'playing') {
+    if (damageStatsOverlayOpen) {
+      if (damageStatsCloseRect && hitTest(x, y, damageStatsCloseRect)) damageStatsOverlayOpen = false
+      return
+    }
+    if (hitTest(x, y, damageStatsButtonRect)) {
+      damageStatsOverlayOpen = true
+      return
+    }
     if (hitTest(x, y, shopButtonRect)) {
       gameState = 'shop'
+      return
+    }
+    if (lumangButtonRect && hitTest(x, y, lumangButtonRect) && isLearned(SKILL_LUMANG_ID) && skillLumangCd <= 0 && recklessBuffRemaining <= 0) {
+      recklessBuffRemaining = LUMANG_BUFF_DURATION
+      skillLumangCd = LUMANG_COOLDOWN
+      if (isLearned(25)) addRage(50)
+      effects.push({ type: 'shout', text: '鲁莽！', x: PLAYER_X, y: playerY, life: 1.2, maxLife: 1.2, stackIndex: getShoutStackIndex() })
+      return
+    }
+    if (odinButtonRect && hitTest(x, y, odinButtonRect) && isLearned(40) && skillOdinCd <= 0 && getEnemiesInRange(1).length > 0) {
+      castSkillOdin()
       return
     }
   } else if (gameState === 'choosing_skill') {
@@ -1262,11 +1862,17 @@ function loop(timestamp) {
     requestAnimationFrame(loop)
     return
   }
-  // 波次间隔倒计时或按波次生成怪
+  // 波次间隔：本波怪物全部出完后开始计时，倒计时结束进入下一波
   if (!gameEnded) {
     if (waveBreakCountdown > 0) {
       waveBreakCountdown -= dt
-      if (waveBreakCountdown <= 0) waveBreakCountdown = 0
+      if (waveBreakCountdown <= 0) {
+        waveBreakCountdown = 0
+        spawnsThisWave = 0
+        wave++
+        if (wave > MAX_WAVE) gameEnded = true
+        saveGame()
+      }
     } else {
       timeSinceSpawn += dt
       if (timeSinceSpawn >= SPAWN_INTERVAL) {
@@ -1276,15 +1882,34 @@ function loop(timestamp) {
     }
   }
 
+  // 仅战斗内累计时间（选技能/商店/波次间隔不计）
+  if (waveBreakCountdown <= 0) combatTimeSeconds += dt
+  // 激怒状态计时
+  if (enrageBuffRemaining > 0) {
+    enrageBuffRemaining = Math.max(0, enrageBuffRemaining - dt)
+    enrageTimeTotal += dt
+  }
+  if (recklessBuffRemaining > 0) recklessBuffRemaining = Math.max(0, recklessBuffRemaining - dt)
+  skillLumangCd = Math.max(0, skillLumangCd - dt)
+  if (kuangLuanBuffRemaining > 0) {
+    kuangLuanBuffRemaining = Math.max(0, kuangLuanBuffRemaining - dt)
+    if (kuangLuanBuffRemaining <= 0) kuangLuanHasteStacks = 0
+  }
+  skillOdinCd = Math.max(0, skillOdinCd - dt * (1 + getEffectiveHaste() / HASTE_PCT_DENOM))
+  tickWound(dt)
   const effectiveHaste = getEffectiveHaste()
   const hasteFactor = 1 + effectiveHaste / HASTE_PCT_DENOM
   skillXueCd = Math.max(0, skillXueCd - dt * hasteFactor)
   skillXueBuff = Math.max(0, skillXueBuff - dt)
   skillXuanFengCd = Math.max(0, skillXuanFengCd - dt * hasteFactor)
   skillShunpiBuff = Math.max(0, skillShunpiBuff - dt)
+  skillNuJiCd = Math.max(0, skillNuJiCd - dt * hasteFactor)
+  skillZhanShaCd = Math.max(0, skillZhanShaCd - dt * hasteFactor)
+  nuJiResetBuffRemaining = Math.max(0, nuJiResetBuffRemaining - dt)
   if (isLearned(SKILL_XUE_ID) && skillXueCd <= 0 && findTarget()) castSkillXue()
   if (skillXuanFengCd <= 0 && getEnemiesInRange(1).length > 0) castSkillXuanFeng()
   if (isLearned(SKILL_BAONU_ID) && playerRage >= SKILL_BAONU_RAGE_COST && findTarget()) castSkillBaoNu()
+  if (isLearned(SKILL_NUJI_ID) && skillNuJiCd <= 0 && findTarget()) castSkillNuJi()
 
   const critResult = applyCrit(computeAttack())
   const interval = computeAttackInterval()
@@ -1292,8 +1917,10 @@ function loop(timestamp) {
   if (timeSinceAttack >= interval) {
     const target = findTarget()
     if (target) {
-      addDamage('normal', critResult.damage)
-      target.hp -= critResult.damage
+      const finalDamage = applyMastery(critResult.damage)
+      addDamage('normal', finalDamage)
+      target.hp -= finalDamage
+      applyLifestealHeal(finalDamage)
       addRage(RAGE_PER_DAMAGE)
       if (critResult.isCrit) addRage(RAGE_ON_CRIT)
       timeSinceAttack = 0
@@ -1312,6 +1939,35 @@ function loop(timestamp) {
         if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
         playSound('hit')
       }
+      if (target.alive && isLearned(SKILL_ZHANSHA_ID) && Math.random() < getZhanShaProcChance() && skillZhanShaCd <= 0) {
+        const zsBase = computeAttack() * getZhanShaDamageMul()
+        const zsCrit = applyCrit(zsBase)
+        const zsFinal = applyMastery(zsCrit.damage)
+        addDamage('zhansha', zsFinal)
+        target.hp -= zsFinal
+        applyLifestealHeal(zsFinal)
+        applyWoundToTarget(target, zsFinal)
+        applyCleaveDamage(target, zsFinal)
+        if (hasRageMechanic()) {
+          if (isLearned(9)) addRage(20)
+          if (isLearned(37)) addRage(5)
+        }
+        skillZhanShaCd = getZhanShaCooldown()
+        effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
+        if (zsCrit.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
+        effects.push({ type: 'shout', text: '斩杀', x: PLAYER_X, y: playerY, life: 1.0, maxLife: 1.0, stackIndex: getShoutStackIndex() })
+        if (target.hp <= 0) {
+          target.alive = false
+          killCount++
+          monsterKillCount++
+          playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
+          giveExp(target.isBoss ? EXP_BOSS : EXP_PER_KILL)
+          if (!target.isBoss) tryDropEquipment()
+          playSound('kill')
+        } else {
+          playSound('hit')
+        }
+      }
     }
   }
 
@@ -1326,11 +1982,19 @@ function loop(timestamp) {
       e.attackCooldown -= dt
       if (e.attackCooldown <= 0) {
         e.attackCooldown = ENEMY_ATTACK_INTERVAL
-        playerHp -= e.attack
+        let dmg = e.attack
+        if (enrageBuffRemaining > 0 && isLearned(31)) dmg *= 0.9
+        playerHp -= dmg
         if (playerHp <= 0) {
-          playerHp = 0
-          gameOver = true
-          saveGame()
+          if (isLearned(35) && !deathReviveUsed) {
+            playerHp = Math.ceil(playerMaxHp * 0.5)
+            deathReviveUsed = true
+            effects.push({ type: 'shout', text: '生死决战！', x: PLAYER_X, y: playerY, life: 1.5, maxLife: 1.5, stackIndex: getShoutStackIndex() })
+          } else {
+            playerHp = 0
+            gameOver = true
+            saveGame()
+          }
         }
         playerHitThisFrame = true
       }
@@ -1350,6 +2014,7 @@ function loop(timestamp) {
 
   drawGame(w, h)
   drawPanel(w, h)
+  if (damageStatsOverlayOpen) drawDamageStatsOverlay(w, h)
   requestAnimationFrame(loop)
 }
 
@@ -1463,7 +2128,7 @@ function drawSkillChoiceOverlay(w, h) {
   ctx.fillRect(0, 0, w, h)
 
   const cardW = (w - 16 * 4) / 3
-  const cardH = 98
+  const cardH = 300
   const blockTop = 24
   const titleH = 48
   const overlaySlotRowH = SKILL_BAR_SLOT_H
@@ -1533,15 +2198,15 @@ function drawSkillChoiceOverlay(w, h) {
         if (isXuanfengProgress) {
           ctx.textBaseline = 'top'
           ctx.fillText(MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀后吞噬', sx + slotW / 2, slotRowY + 26)
-          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, slotRowY + 36)
           ctx.textBaseline = 'middle'
         } else if (isBaonuProgress) {
           ctx.textBaseline = 'top'
           ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, slotRowY + 26)
-          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, slotRowY + 36)
           ctx.textBaseline = 'middle'
         } else {
-          const progressStr = progressList.map(p => p.name + p.current + '/' + p.total).join(' ')
+          const progressStr = progressList.map(p => p.name + formatProgressDisplay(p.current, p.total)).join(' ')
           ctx.fillText(progressStr, sx + slotW / 2, slotRowY + slotH - 12)
         }
       }
@@ -1565,11 +2230,13 @@ function drawSkillChoiceOverlay(w, h) {
   for (let i = 0; i < skill_choice_count; i++) {
     const x = 16 + i * (16 + cardW)
     const id = skill_choices[i]
-    const isAdvanced = id >= BASE_SKILL_COUNT
+    const isAdvanced = id > 7
     roundRect(x, cardY, cardW, cardH, UI.radiusSm)
     ctx.fillStyle = isAdvanced ? UI.bgCardAlt : UI.bgCard
     ctx.fill()
-    ctx.strokeStyle = isAdvanced ? UI.primary : UI.border
+    let cardStroke = isAdvanced ? UI.primary : UI.border
+    if (id === SKILL_LUMANG_ID) cardStroke = UI.danger
+    ctx.strokeStyle = cardStroke
     ctx.lineWidth = 1.5
     ctx.stroke()
     const sk = allSkills[id]
@@ -1584,21 +2251,31 @@ function drawSkillChoiceOverlay(w, h) {
     ctx.font = 'bold 14px sans-serif'
     ctx.fillText(sk.name, x + cardW / 2, cardY + (isAdvanced ? 28 : 26))
     ctx.fillStyle = UI.textDim
-    ctx.font = '11px sans-serif'
-    ctx.fillText('攻×' + sk.attackMul + ' 速×' + sk.speedMul, x + cardW / 2, cardY + 50)
+    ctx.font = '10px sans-serif'
+    const descText = sk.desc != null ? sk.desc : ('攻×' + sk.attackMul + ' 速×' + sk.speedMul)
+    const descPadding = 8
+    const descMaxW = Math.max(0, cardW - descPadding * 2)
+    const descLineH = 12
+    const descMaxLines = 14
+    const descStartY = cardY + 40
+    fillTextWrapped(descText, x + cardW / 2, descStartY, descMaxW, descLineH, descMaxLines)
     const belongTo = getSynergiesForSkill(id)
     const canActivate = getSynergiesIfChoose(id)
-    let lineY = cardY + 62
+    let lineY = cardY + 40 + descMaxLines * descLineH + 4
+    ctx.fillStyle = UI.textMuted
+    ctx.font = '10px sans-serif'
+    const ruleText = getDevourRuleText(id)
+    fillTextWrapped(ruleText, x + cardW / 2, lineY, descMaxW, 12, 4)
+    lineY += 12 * 4 + 2
     if (belongTo.length > 0) {
-      ctx.fillStyle = UI.textMuted
-      ctx.font = '10px sans-serif'
+      ctx.fillStyle = UI.textDim
       ctx.fillText('所属吞噬：' + belongTo.join('、'), x + cardW / 2, lineY)
       lineY += 14
     }
     if (canActivate.length > 0) {
       ctx.fillStyle = UI.success
       ctx.font = '11px sans-serif'
-      ctx.fillText('可激活吞噬：' + canActivate.join('、'), x + cardW / 2, lineY)
+      ctx.fillText('选此可激活：' + canActivate.join('、'), x + cardW / 2, lineY)
     }
     skillChoiceRects.push({ x, y: cardY, w: cardW, h: cardH })
   }
@@ -1700,7 +2377,9 @@ function drawReplaceTargetOverlay(w, h) {
     if (filled) {
       ctx.fillStyle = filled.isAdvanced ? UI.bgCardAlt : UI.bgCard
       ctx.fill()
-      ctx.strokeStyle = filled.isAdvanced ? UI.primary : UI.border
+      let replaceStroke = filled.isAdvanced ? UI.primary : UI.border
+      if (filled.skillId === SKILL_LUMANG_ID) replaceStroke = UI.danger
+      ctx.strokeStyle = replaceStroke
       ctx.lineWidth = 1
       ctx.stroke()
       ctx.font = (filled.name.length > 2 ? '10px' : '11px') + ' sans-serif'
@@ -1716,15 +2395,15 @@ function drawReplaceTargetOverlay(w, h) {
         if (isXuanfengProgress) {
           ctx.textBaseline = 'top'
           ctx.fillText(MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀后吞噬', sx + slotW / 2, sy + 26)
-          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, sy + 36)
+          ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, sy + 36)
           ctx.textBaseline = 'middle'
         } else if (isBaonuProgress) {
           ctx.textBaseline = 'top'
           ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, sy + 26)
-          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, sy + 36)
+          ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, sy + 36)
           ctx.textBaseline = 'middle'
         } else {
-          const progressStr = progressList.map(p => p.name + p.current + '/' + p.total).join(' ')
+          const progressStr = progressList.map(p => p.name + formatProgressDisplay(p.current, p.total)).join(' ')
           ctx.fillText(progressStr, sx + slotW / 2, sy + slotH - 12)
         }
       }
@@ -1898,7 +2577,7 @@ function drawGame(w, h) {
     ctx.fillStyle = UI.text
     ctx.font = '9px sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText(Math.ceil(e.hp) + '/' + e.maxHp, ex, e.y - radius - 20)
+    ctx.fillText(Math.ceil(e.hp) + '/' + Math.round(e.maxHp), ex, e.y - radius - 20)
     ctx.textAlign = 'left'
   }
 
@@ -2012,12 +2691,12 @@ function drawPanel(w, h) {
   const equipRowH = 22
   const equipRowY = slotRowY + slotRowH + 16
   const btnY = equipRowY + equipRowH + 10
-  const attrBoxH = 66
+  const attrBoxH = 82
   const synY = btnY + attrBoxH + 6
-  const damageModuleH = 82
   const synW = w - gap * 2
-  const damageModuleY = panelTop + panelH - damageModuleH - 8
-  const synH = Math.max(40, damageModuleY - synY - 8)
+  const damageStatsBtnH = 34
+  const damageStatsBtnY = panelTop + panelH - damageStatsBtnH - 8
+  const synH = Math.max(40, damageStatsBtnY - synY - 8)
 
   const shopX = w - gap - btnW
   const resBlockTop = panelTop + 6
@@ -2043,6 +2722,44 @@ function drawPanel(w, h) {
   ctx.textBaseline = 'middle'
   ctx.fillText('商店', shopX + btnW / 2, shopBtnY + 14)
   shopButtonRect = { x: shopX, y: shopBtnY, w: btnW, h: 28 }
+
+  if (isLearned(SKILL_LUMANG_ID)) {
+    const lumangBtnY = shopBtnY + 28 + 6
+    const canCast = skillLumangCd <= 0 && recklessBuffRemaining <= 0
+    roundRect(shopX, lumangBtnY, btnW, 28, UI.radiusSm)
+    ctx.fillStyle = canCast ? '#b45309' : UI.bgCard
+    ctx.fill()
+    ctx.strokeStyle = canCast ? UI.primary : UI.textMuted
+    ctx.lineWidth = 1
+    ctx.stroke()
+    ctx.fillStyle = canCast ? UI.bg : UI.textMuted
+    ctx.font = 'bold 12px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const lumangText = recklessBuffRemaining > 0 ? '鲁莽 ' + recklessBuffRemaining.toFixed(1) + 's' : (skillLumangCd > 0 ? '鲁莽 CD' + skillLumangCd.toFixed(0) : '鲁莽')
+    ctx.fillText(lumangText, shopX + btnW / 2, lumangBtnY + 14)
+    lumangButtonRect = { x: shopX, y: lumangBtnY, w: btnW, h: 28 }
+  } else {
+    lumangButtonRect = null
+  }
+  if (isLearned(40)) {
+    const odinBtnY = (lumangButtonRect ? lumangButtonRect.y + lumangButtonRect.h + 4 : shopBtnY + 28 + 6)
+    const canOdin = skillOdinCd <= 0 && getEnemiesInRange(1).length > 0
+    roundRect(shopX, odinBtnY, btnW, 28, UI.radiusSm)
+    ctx.fillStyle = canOdin ? '#6b21a8' : UI.bgCard
+    ctx.fill()
+    ctx.strokeStyle = canOdin ? '#a78bfa' : UI.textMuted
+    ctx.stroke()
+    ctx.fillStyle = UI.text
+    ctx.font = '12px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const odinText = skillOdinCd > 0 ? '奥丁 CD' + skillOdinCd.toFixed(0) : '奥丁之怒'
+    ctx.fillText(odinText, shopX + btnW / 2, odinBtnY + 14)
+    odinButtonRect = { x: shopX, y: odinBtnY, w: btnW, h: 28 }
+  } else {
+    odinButtonRect = null
+  }
 
   ctx.fillStyle = UI.textMuted
   ctx.font = '11px sans-serif'
@@ -2094,6 +2811,16 @@ function drawPanel(w, h) {
           slotBg = UI.danger
           slotStroke = UI.primary
         }
+      } else if (filled.isActive && filled.skillId === SKILL_NUJI_ID) {
+        activeCd = skillNuJiCd
+        activeCdMax = SKILL_NUJI_COOLDOWN
+        if (skillNuJiCd > 0) {
+          slotBg = 'rgba(60,58,70,0.9)'
+          slotStroke = UI.textMuted
+        } else {
+          slotBg = UI.danger
+          slotStroke = UI.primary
+        }
       } else if (filled.isActive && filled.skillId === SKILL_BAONU_ID) {
         if (playerRage >= SKILL_BAONU_RAGE_COST) {
           slotBg = UI.danger
@@ -2102,7 +2829,18 @@ function drawPanel(w, h) {
           slotBg = 'rgba(60,58,70,0.9)'
           slotStroke = UI.textMuted
         }
+      } else if (filled.isActive && filled.skillId === 40) {
+        activeCd = skillOdinCd
+        activeCdMax = SKILL_ODIN_COOLDOWN
+        if (skillOdinCd > 0) {
+          slotBg = 'rgba(60,58,70,0.9)'
+          slotStroke = UI.textMuted
+        } else {
+          slotBg = '#6b21a8'
+          slotStroke = '#a78bfa'
+        }
       }
+      if (filled.skillId === SKILL_LUMANG_ID) slotStroke = UI.danger
       ctx.fillStyle = slotBg
       ctx.fill()
       ctx.strokeStyle = slotStroke
@@ -2133,6 +2871,9 @@ function drawPanel(w, h) {
         } else if (filled.skillId === SKILL_BAONU_ID) {
           ctx.fillStyle = playerRage >= SKILL_BAONU_RAGE_COST ? UI.primary : UI.textMuted
           ctx.fillText(playerRage >= SKILL_BAONU_RAGE_COST ? '就绪' : '怒气不足', sx + slotW / 2, slotRowY + 26)
+        } else if (filled.skillId === 40) {
+          ctx.fillStyle = skillOdinCd <= 0 ? '#a78bfa' : UI.textMuted
+          ctx.fillText(skillOdinCd > 0 ? 'CD ' + Math.ceil(skillOdinCd) + 's' : '就绪', sx + slotW / 2, slotRowY + 26)
         } else if (activeCd > 0) {
           ctx.fillStyle = UI.textMuted
           ctx.fillText('CD ' + Math.ceil(activeCd) + 's', sx + slotW / 2, slotRowY + 26)
@@ -2151,15 +2892,15 @@ function drawPanel(w, h) {
         if (isXuanfengProgress) {
           ctx.textBaseline = 'top'
           ctx.fillText(MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀后吞噬', sx + slotW / 2, slotRowY + 26)
-          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, slotRowY + 36)
           ctx.textBaseline = 'middle'
         } else if (isBaonuProgress) {
           ctx.textBaseline = 'top'
           ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, slotRowY + 26)
-          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, slotRowY + 36)
           ctx.textBaseline = 'middle'
         } else {
-          const progressStr = progressList.map(p => p.name + p.current + '/' + p.total).join(' ')
+          const progressStr = progressList.map(p => p.name + formatProgressDisplay(p.current, p.total)).join(' ')
           ctx.fillText(progressStr, sx + slotW / 2, slotRowY + slotH - 12)
         }
       }
@@ -2228,6 +2969,11 @@ function drawPanel(w, h) {
   const effectiveHasteDisplay = getEffectiveHaste()
   const critPct = (getCritChance() * 100).toFixed(0)
   ctx.fillText('暴击 ' + effectiveCritVal + ' (' + critPct + '%)  极速 ' + effectiveHasteDisplay + ' (攻速/CD+' + effectiveHasteDisplay + '%)', gap + 10, btnY + 58)
+  const masteryVal = getEffectiveMastery()
+  const lifestealVal = getEffectiveLifesteal()
+  if (masteryVal > 0 || lifestealVal > 0 || isLearned(1)) {
+    ctx.fillText('精通 ' + masteryVal + '%  吸血 ' + lifestealVal + '%', gap + 10, btnY + 70)
+  }
   if (shopAttackPct > 0 || shopSpeedPct > 0) {
     ctx.fillStyle = UI.primary
     ctx.font = '11px sans-serif'
@@ -2248,11 +2994,16 @@ function drawPanel(w, h) {
   ctx.fillText('吞噬效果', gap + 10, synY + 22)
 
   const activeSynergies = []
-  for (let i = 0; i < SYNERGIES.length; i++)
-    if (isSynergyActive(i)) activeSynergies.push(SYNERGIES[i])
-  const xuanfengDevoured = isLearned(SKILL_XUANFENG_ID) && monsterKillCount >= MONSTER_KILL_FOR_XUANFENG_DEVOUR
-  const baonuDevoured = isLearned(SKILL_BAONU_ID) && rageConsumedTotal >= RAGE_CONSUMED_FOR_BAONU_DEVOUR
-  const hasAnyDevour = activeSynergies.length > 0 || xuanfengDevoured || baonuDevoured
+  for (let i = 0; i < SYNERGY_DEFS.length; i++)
+    if (isSynergyActive(i)) activeSynergies.push(SYNERGY_DEFS[i])
+  const xuanfengDevoured = isLearned(SKILL_XUANFENG_ID) && isSkillConsumedBySynergy(SKILL_XUANFENG_ID)
+  const baonuDevoured = isLearned(SKILL_BAONU_ID) && isSkillConsumedBySynergy(SKILL_BAONU_ID)
+  const otherConsumed = learned_skill_ids.filter(id =>
+    isSkillConsumedBySynergy(id) &&
+    !activeSynergies.some(s => s.req.includes(id)) &&
+    id !== SKILL_XUANFENG_ID && id !== SKILL_BAONU_ID
+  )
+  const hasAnyDevour = activeSynergies.length > 0 || xuanfengDevoured || baonuDevoured || otherConsumed.length > 0
   if (!hasAnyDevour) {
     ctx.fillStyle = UI.textMuted
     ctx.font = '12px sans-serif'
@@ -2263,9 +3014,9 @@ function drawPanel(w, h) {
     let lineY = synY + 42
     for (let i = 0; i < activeSynergies.length; i++) {
       const s = activeSynergies[i]
-      const consumedNames = s.req.map(id => (SKILL_POOL[id] && SKILL_POOL[id].name) || '')
+      const consumedNames = s.req.map(id => (getSkillById(id) && getSkillById(id).name) || '')
       const consumedStr = consumedNames.filter(Boolean).join('、')
-      ctx.fillText(s.name + '：' + s.effect, gap + 10, lineY)
+      ctx.fillText(s.name + '（已激活）', gap + 10, lineY)
       lineY += 16
       ctx.fillStyle = UI.textMuted
       ctx.font = '11px sans-serif'
@@ -2294,34 +3045,69 @@ function drawPanel(w, h) {
       ctx.fillStyle = UI.textDim
       ctx.font = '12px sans-serif'
     }
+    if (otherConsumed.length > 0) {
+      const names = otherConsumed.map(id => (getSkillById(id) && getSkillById(id).name) || ('id' + id)).filter(Boolean)
+      ctx.fillText('已吞噬 ' + names.join('、') + '，不占栏位', gap + 10, lineY)
+      lineY += 16
+    }
   }
 
-  roundRect(gap, damageModuleY, synW, damageModuleH, UI.radiusSm)
+  const damageStatsBtnW = 100
+  roundRect(gap, damageStatsBtnY, damageStatsBtnW, damageStatsBtnH, UI.radiusSm)
   ctx.fillStyle = UI.bgCard
   ctx.fill()
   ctx.strokeStyle = UI.border
   ctx.lineWidth = 1
   ctx.stroke()
-  ctx.fillStyle = UI.primary
+  ctx.fillStyle = UI.text
   ctx.font = 'bold 12px sans-serif'
-  ctx.fillText('伤害统计  总伤害 ' + Math.round(getTotalDamage()), gap + 10, damageModuleY + 18)
-  const sorted = getDamageStatsSorted()
-  const barH = 12
-  const barGap = 2
-  const labelW = 40
-  const rightW = 58
-  const barW = Math.max(0, synW - 20 - labelW - rightW)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('伤害统计', gap + damageStatsBtnW / 2, damageStatsBtnY + damageStatsBtnH / 2)
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  damageStatsButtonRect = { x: gap, y: damageStatsBtnY, w: damageStatsBtnW, h: damageStatsBtnH }
+}
+
+function drawDamageStatsOverlay(w, h) {
+  ctx.fillStyle = 'rgba(15,14,20,0.88)'
+  ctx.fillRect(0, 0, w, h)
+  const pad = 20
+  const boxW = Math.min(320, w - pad * 2)
+  const boxH = Math.min(380, h - pad * 2)
+  const boxX = (w - boxW) / 2
+  const boxY = (h - boxH) / 2
+  roundRect(boxX, boxY, boxW, boxH, UI.radius)
+  ctx.fillStyle = UI.bgPanel
+  ctx.fill()
+  ctx.strokeStyle = UI.border
+  ctx.lineWidth = 1
+  ctx.stroke()
+
+  ctx.fillStyle = UI.primary
+  ctx.font = 'bold 16px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('伤害统计  总伤害 ' + Math.round(getTotalDamage()), w / 2, boxY + 28)
+  ctx.textAlign = 'left'
+
+  const innerGap = 16
+  const barH = 14
+  const barGap = 4
+  const labelW = 52
+  const rightW = 62
+  const barW = Math.max(0, boxW - innerGap * 2 - labelW - rightW)
   const totalDmg = getTotalDamage()
+  const sorted = getDamageStatsSorted()
+  let rowY = boxY + 52
   if (sorted.length > 0 && totalDmg > 0) {
-    let rowY = damageModuleY + 28
     for (let i = 0; i < sorted.length; i++) {
       const [name, val, count] = sorted[i]
       const pct = val / totalDmg
       ctx.fillStyle = UI.text
-      ctx.font = '10px sans-serif'
-      ctx.fillText(name, gap + 10, rowY + 9)
-      const barX = gap + labelW + 4
-      const barY = rowY + 1
+      ctx.font = '11px sans-serif'
+      ctx.fillText(name, boxX + innerGap, rowY + 10)
+      const barX = boxX + innerGap + labelW + 4
+      const barY = rowY + 2
       roundRect(barX, barY, barW, barH - 2, 2)
       ctx.fillStyle = 'rgba(0,0,0,0.25)'
       ctx.fill()
@@ -2331,15 +3117,35 @@ function drawPanel(w, h) {
       ctx.fillStyle = UI.textDim
       ctx.font = '10px sans-serif'
       ctx.textAlign = 'right'
-      ctx.fillText(Math.round(val) + '  ' + count + '次', gap + synW - 12, rowY + 9)
+      ctx.fillText(Math.round(val) + '  ' + count + '次', boxX + boxW - innerGap - 8, rowY + 10)
       ctx.textAlign = 'left'
       rowY += barH + barGap
     }
   } else {
     ctx.fillStyle = UI.textMuted
-    ctx.font = '11px sans-serif'
-    ctx.fillText('造成伤害后在此显示', gap + 10, damageModuleY + 44)
+    ctx.font = '12px sans-serif'
+    ctx.fillText('造成伤害后在此显示', boxX + innerGap, rowY + 12)
+    rowY += 28
   }
+
+  const closeW = 80
+  const closeH = 36
+  const closeX = (w - closeW) / 2
+  const closeY = boxY + boxH - closeH - 20
+  roundRect(closeX, closeY, closeW, closeH, UI.radiusSm)
+  ctx.fillStyle = UI.bgCard
+  ctx.fill()
+  ctx.strokeStyle = UI.primary
+  ctx.lineWidth = 1
+  ctx.stroke()
+  ctx.fillStyle = UI.primary
+  ctx.font = 'bold 14px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('关闭', closeX + closeW / 2, closeY + closeH / 2)
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  damageStatsCloseRect = { x: closeX, y: closeY, w: closeW, h: closeH }
 }
 
 function drawShopOverlay(w, h) {

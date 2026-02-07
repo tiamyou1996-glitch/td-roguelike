@@ -1,0 +1,81 @@
+分类,项目,当前数值,说明与公式,代码常量/位置
+玩家-生命,生命基础,200,最大生命 = HP_BASE + 力量×HP_PER_STR,HP_BASE
+玩家-生命,每点力量生命,40,,HP_PER_STR
+玩家-攻击,攻击基础,5,基础攻击 = MAIN_STAT_ATTACK_BASE + 主属性×MAIN_STAT_ATTACK_PER_POINT,MAIN_STAT_ATTACK_BASE
+玩家-攻击,主属性每点攻击,0.2,,MAIN_STAT_ATTACK_PER_POINT
+玩家-攻击,基础攻击间隔(秒),1,间隔再除以技能/装备/极速等倍率,BASE_ATTACK_INTERVAL
+玩家-暴击,暴击率分母,100,暴击率 = 暴击/(暴击+100),CRIT_RATE_DENOM
+玩家-暴击,暴击伤害倍率,2,暴击时伤害×2,CRIT_DAMAGE_MUL
+玩家-极速,极速百分比分母,100,1极速=1%攻速与CD加成；间隔/= (1+极速/100),HASTE_PCT_DENOM
+玩家-怒气,怒气上限,100,,RAGE_MAX
+玩家-怒气,普攻命中获得怒气,5,,RAGE_PER_DAMAGE
+玩家-怒气,普攻暴击额外怒气,5,,RAGE_ON_CRIT
+玩家-怒气,嗜血释放额外怒气,10,,RAGE_XUE_BONUS
+怪物-基础,小怪基础血量,100,第1波小怪血量,ENEMY_MAX_HP
+怪物-基础,每波血量倍率,1.2,每波=上一波×此值（即+20%）,ENEMY_HP_PER_WAVE_MUL
+怪物-基础,小怪移速(世界单位/秒),48,,ENEMY_SPEED
+怪物-基础,小怪攻击力,1,,ENEMY_ATTACK
+怪物-基础,小怪攻击间隔(秒),1,,ENEMY_ATTACK_INTERVAL
+怪物-基础,Boss血量倍率,6,Boss血量=该波小怪血量×此值,BOSS_HP_MUL
+怪物-基础,Boss移速倍率,0.7,Boss移速=小怪移速×此值,BOSS_SPEED_MUL
+波次与刷怪,总波数,20,,MAX_WAVE
+波次与刷怪,每波怪物数量,10,,SPAWNS_PER_WAVE
+波次与刷怪,刷怪间隔(秒),0.7,,SPAWN_INTERVAL
+波次与刷怪,波次间隔(秒),10,每波结束后的倒计时,WAVE_BREAK_DURATION
+经验与升级,击杀小怪经验,5,,EXP_PER_KILL
+经验与升级,击杀Boss经验,20,,EXP_BOSS
+经验与升级,升级所需经验基础,10,所需 = BASE_EXP_TO_NEXT + 当前等级×5,BASE_EXP_TO_NEXT
+金币,击杀小怪金币,1,,GOLD_PER_KILL
+金币,击杀Boss金币,5,,GOLD_BOSS
+主动-嗜血,伤害倍率,1.5,造成 攻击力×此值（150%）,SKILL_XUE_DAMAGE_MUL
+主动-嗜血,回复比例,0.2,回复造成伤害的20%生命,SKILL_XUE_HEAL_PCT
+主动-嗜血,攻速buff时长(秒),3,,SKILL_XUE_BUFF_DURATION
+主动-嗜血,攻速buff倍率,1.2,嗜血后3秒内攻速×1.2,（代码中写死 1.2）
+主动-嗜血,冷却(秒),4,,SKILL_XUE_COOLDOWN
+主动-旋风斩,伤害倍率,0.8,对每目标造成攻击力×80%,SKILL_XUANFENG_DAMAGE_MUL
+主动-旋风斩,最大目标数,5,,SKILL_XUANFENG_MAX_TARGETS
+主动-旋风斩,冷却(秒),5,,SKILL_XUANFENG_COOLDOWN
+主动-旋风斩,吞噬条件-击杀怪数,50,达到后旋风斩被吞噬不占栏位,MONSTER_KILL_FOR_XUANFENG_DEVOUR
+主动-顺劈,顺劈伤害比例,0.6,主目标外最多4单位受 主目标伤害×60%,SHUNPI_DAMAGE_MUL
+主动-顺劈,顺劈额外目标数,4,,SHUNPI_EXTRA_TARGETS
+主动-暴怒,消耗怒气,100,,SKILL_BAONU_RAGE_COST
+主动-暴怒,力量系数,10,伤害 = (力量×此值 + 攻击力)×暴怒百分比,SKILL_BAONU_STR_FACTOR
+主动-暴怒,伤害百分比,2.8,即280%,SKILL_BAONU_PCT
+主动-暴怒,吞噬条件-累计消耗怒气,500,达到后暴怒被吞噬不占栏位,RAGE_CONSUMED_FOR_BAONU_DEVOUR
+吞噬-刺客,攻击倍率,1.15,激活后攻击×115%,SYNERGIES[0].attackMul
+吞噬-刺客,极速加成,10,,SYNERGIES[0].hasteBonus
+吞噬-战士,攻击倍率,1.2,激活后攻击×120%,SYNERGIES[1].attackMul
+吞噬-迅捷,攻击倍率,1,,SYNERGIES[2].attackMul
+吞噬-迅捷,极速加成,25,,SYNERGIES[2].hasteBonus
+吞噬-破势,攻击倍率,1.15,,SYNERGIES[3].attackMul
+吞噬-破势,极速加成,10,,SYNERGIES[3].hasteBonus
+吞噬-均衡之道,攻击倍率,1.1,,SYNERGIES[4].attackMul
+吞噬-均衡之道,极速加成,20,,SYNERGIES[4].hasteBonus
+商店-生命药水,价格,15,恢复15%最大生命,SHOP_ITEMS[0].cost / healPct:0.15
+商店-攻击药剂,价格,25,攻击+10%永久（playerAttackMul+=0.1）,SHOP_ITEMS[1].cost
+商店-攻速药剂,价格,25,攻速+10%永久（playerSpeedMul+=0.1）,SHOP_ITEMS[2].cost
+商店-生命上限,价格,40,最大生命+20永久,SHOP_ITEMS[3].cost
+商店-大生命药水,价格,35,恢复40%最大生命,SHOP_ITEMS[4].cost / healPct:0.40
+装备-掉落概率,小怪击杀掉落率,0.01,即1%,EQUIPMENT_DROP_RATE
+装备-利刃id0,攻击倍率,1.1,,EQUIPMENT_DEFS[0]
+装备-轻靴id1,攻速倍率,1.1,,EQUIPMENT_DEFS[1]
+装备-护甲id2,生命上限+,15,,EQUIPMENT_DEFS[2].maxHp
+装备-破军刃id3,攻击倍率,1.15,,EQUIPMENT_DEFS[3]
+装备-灵巧护腕id4,攻速倍率,1.12,,EQUIPMENT_DEFS[4]
+装备-铁壁id5,生命上限+,25,,EQUIPMENT_DEFS[5].maxHp
+装备-狂暴之握id6,攻击倍率,1.08,,EQUIPMENT_DEFS[6]
+装备-狂暴之握id6,攻速倍率,1.08,,EQUIPMENT_DEFS[6]
+装备-疾风之靴id7,攻速倍率,1.15,,EQUIPMENT_DEFS[7]
+装备-生命之种id8,攻击倍率,1.05,,EQUIPMENT_DEFS[8]
+装备-生命之种id8,生命上限+,20,,EQUIPMENT_DEFS[8].maxHp
+装备-狂暴战刃id9,固定攻击+,50,,EQUIPMENT_DEFS[9].attackFlat
+装备-狂暴战刃id9,怒气获取+%,30,,EQUIPMENT_DEFS[9].rageGainPct
+职业-狂暴战,初始力量,15,,CLASSES.fury_warrior.baseStr
+职业-狂暴战,初始敏捷,10,,baseAgi
+职业-狂暴战,初始智力,10,,baseInt
+职业-狂暴战,每级力量,2,,strPerLevel
+职业-狂暴战,每级敏捷,1,,agiPerLevel
+职业-狂暴战,每级智力,0,,intPerLevel
+技能栏,最大技能栏位,7,,MAX_SKILL_SLOTS
+世界与布局,世界宽度(逻辑),400,怪物路程固定，走到玩家时间一致,WORLD_WIDTH
+世界与布局,玩家世界X,50,,PLAYER_X / REACH_PLAYER_X
