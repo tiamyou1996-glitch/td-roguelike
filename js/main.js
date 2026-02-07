@@ -780,7 +780,7 @@ function computeAttackInterval() {
 }
 
 function castSkillXue() {
-  if (skillXueCd > 0 || gameOver || gameEnded) return
+  if (!isLearned(SKILL_XUE_ID) || skillXueCd > 0 || gameOver || gameEnded) return
   const target = findTarget()
   if (!target) return
   const critResult = applyCrit(computeAttack() * SKILL_XUE_DAMAGE_MUL)
@@ -1282,7 +1282,7 @@ function loop(timestamp) {
   skillXueBuff = Math.max(0, skillXueBuff - dt)
   skillXuanFengCd = Math.max(0, skillXuanFengCd - dt * hasteFactor)
   skillShunpiBuff = Math.max(0, skillShunpiBuff - dt)
-  if (skillXueCd <= 0 && findTarget()) castSkillXue()
+  if (isLearned(SKILL_XUE_ID) && skillXueCd <= 0 && findTarget()) castSkillXue()
   if (skillXuanFengCd <= 0 && getEnemiesInRange(1).length > 0) castSkillXuanFeng()
   if (isLearned(SKILL_BAONU_ID) && playerRage >= SKILL_BAONU_RAGE_COST && findTarget()) castSkillBaoNu()
 
