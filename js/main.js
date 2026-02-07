@@ -1,4 +1,4 @@
-// 上半部分：横屏游戏区；下半部分：套装展示、商店
+// 上半部分：横屏游戏区；下半部分：吞噬展示、商店
 const canvas = wx.createCanvas()
 const ctx = canvas.getContext('2d')
 
@@ -40,6 +40,13 @@ const GAME_HEIGHT_RATIO = 0.32
 let gameTop = 0
 let gameHeight = 0
 let panelTop = 0
+let gameWidth = 320 // 游戏区像素宽度，在 updateLayout 中设为 canvas.width；用于世界坐标转屏幕 x
+
+// 世界宽度（逻辑单位）：怪物从右侧生成走到玩家的「路程」固定，保证不同屏幕宽度下走到玩家时间一致
+const WORLD_WIDTH = 400
+function worldToScreenX(worldX) {
+  return (worldX / WORLD_WIDTH) * gameWidth
+}
 
 // 游戏常量
 const PLAYER_X = 50
@@ -71,7 +78,7 @@ const HP_PER_STR = 40
 const REACH_PLAYER_X = 50
 const ENEMY_SPEED = 48
 const ENEMY_MAX_HP = 100
-const ENEMY_HP_PER_WAVE_MUL = 1.5
+const ENEMY_HP_PER_WAVE_MUL = 1.55
 const ENEMY_ATTACK = 1
 const ENEMY_ATTACK_INTERVAL = 1
 const SPAWN_MARGIN = 30
@@ -89,6 +96,9 @@ const BOSS_HP_MUL = 6
 const BOSS_SPEED_MUL = 0.7
 const BASE_EXP_TO_NEXT = 10
 const MAX_SKILL_SLOTS = 7
+// 技能栏统一尺寸（主界面、选技能界面、替换技能界面一致）
+const SKILL_BAR_SLOT_H = 52
+const SKILL_BAR_SLOT_GAP = 4
 // 主动技能·嗜血：立即造成150%伤害，回复造成伤害的20%生命，随后3秒攻速×1.2，CD 4秒
 const SKILL_XUE_DAMAGE_MUL = 1.5
 const SKILL_XUE_HEAL_PCT = 0.2
@@ -99,6 +109,8 @@ const SKILL_XUANFENG_DAMAGE_MUL = 0.8
 const SKILL_XUANFENG_MAX_TARGETS = 5
 const SKILL_XUANFENG_COOLDOWN = 5
 const SHUNPI_BUFF_DURATION = SKILL_XUANFENG_COOLDOWN // 与旋风斩 CD 同步，同为 5s
+const MONSTER_KILL_FOR_XUANFENG_DEVOUR = 50 // 击杀怪数达到此值后，旋风斩被吞噬（不占栏位）
+const RAGE_CONSUMED_FOR_BAONU_DEVOUR = 500 // 累计消耗怒气达到此值后，暴怒被吞噬（不占栏位）
 const SHUNPI_DAMAGE_MUL = 0.6
 const SHUNPI_EXTRA_TARGETS = 4
 const MAX_EQUIP_SLOTS = 6
@@ -114,10 +126,11 @@ const RAGE_PER_DAMAGE = 5
 const RAGE_ON_CRIT = 5
 // RAGE_PER_HIT_TAKEN：部分战士可配置「受到攻击获得怒气」，当前未用
 const RAGE_XUE_BONUS = 10 // 嗜血释放时额外获得
-// 暴怒：消耗 100 怒气，造成 200% 伤害，无 CD，可触发顺劈
+// 暴怒：消耗 100 怒气，伤害 = (力量×10 + 攻击力)×280%，无 CD，可触发顺劈
 const SKILL_BAONU_ID = 16
 const SKILL_BAONU_RAGE_COST = 100
-const SKILL_BAONU_DAMAGE_MUL = 2
+const SKILL_BAONU_STR_FACTOR = 10   // 力量参与倍率
+const SKILL_BAONU_PCT = 2.8         // 280%
 
 // 基础技能池（前 12 与 wasm-game 一致；13 嗜血；14、15 暴击/极速被动；16 旋风斩；17 暴怒）
 const SKILL_XUE_ID = 12
@@ -143,13 +156,13 @@ const SKILL_POOL = [
   { name: '暴怒', attackMul: 1.0, speedMul: 1.0, isActive: true }
 ]
 
-// 套装：名称、需求技能 id、需求描述、效果描述、攻击倍率、攻速倍率
+// 套装（吞噬）：名称、需求技能 id、需求描述、效果描述、攻击倍率、极速加成（原攻速已改为极速）
 const SYNERGIES = [
-  { name: '刺客', req: [0, 3], requirement: '强力一击, 锋芒', effect: '攻击+15%, 攻速+10%', attackMul: 1.15, speedMul: 1.10 },
-  { name: '战士', req: [0, 5], requirement: '强力一击, 重击', effect: '攻击+20%', attackMul: 1.20, speedMul: 1.00 },
-  { name: '迅捷', req: [1, 4], requirement: '攻速提升, 连击', effect: '攻速+25%', attackMul: 1.00, speedMul: 1.25 },
-  { name: '破势', req: [7, 9], requirement: '破甲, 致命', effect: '攻击+15%, 攻速+10%', attackMul: 1.15, speedMul: 1.10 },
-  { name: '均衡之道', req: [6, 10], requirement: '轻刃, 均衡', effect: '攻击+10%, 攻速+20%', attackMul: 1.10, speedMul: 1.20 }
+  { name: '刺客', req: [0, 3], requirement: '强力一击, 锋芒', effect: '攻击+15%, 极速+10', attackMul: 1.15, hasteBonus: 10 },
+  { name: '战士', req: [0, 5], requirement: '强力一击, 重击', effect: '攻击+20%', attackMul: 1.20 },
+  { name: '迅捷', req: [1, 4], requirement: '攻速提升, 连击', effect: '极速+25', attackMul: 1.00, hasteBonus: 25 },
+  { name: '破势', req: [7, 9], requirement: '破甲, 致命', effect: '攻击+15%, 极速+10', attackMul: 1.15, hasteBonus: 10 },
+  { name: '均衡之道', req: [6, 10], requirement: '轻刃, 均衡', effect: '攻击+10%, 极速+20', attackMul: 1.10, hasteBonus: 20 }
 ]
 
 // 每个基础套装对应一个独立进阶卡池，激活该套装后才会在 3 选 1 中出现该池的卡
@@ -221,6 +234,8 @@ let timeSinceAttack = 0
 let gameOver = false
 let lastTime = 0
 let killCount = 0
+let monsterKillCount = 0 // 仅统计战斗中击杀的怪数，用于旋风斩吞噬等
+let rageConsumedTotal = 0 // 累计消耗的怒气，用于暴怒吞噬（每次释放暴怒 +100）
 let playerGold = 0
 const DAMAGE_TYPE_NAMES = { normal: '普攻', xue: '嗜血', xuanfeng: '旋风斩', cleave: '顺劈', baonu: '暴怒' }
 const DAMAGE_TYPE_COLORS = { '普攻': '#3b82f6', '嗜血': '#e8a84a', '旋风斩': '#a78bfa', '顺劈': '#22c55e', '暴怒': '#c2410c' }
@@ -375,6 +390,8 @@ function saveGame() {
       playerMaxHp,
       playerGold,
       killCount,
+      monsterKillCount,
+      rageConsumedTotal,
       damageByType: { ...damageByType },
       hitCountByType: { ...hitCountByType },
       learned_skill_ids: learned_skill_ids.slice(),
@@ -426,6 +443,8 @@ function loadGame() {
     playerMaxHp = data.playerMaxHp ?? (HP_BASE + (data.playerStr ?? loadCls.baseStr) * HP_PER_STR)
     playerGold = data.playerGold || 0
     killCount = data.killCount || 0
+    monsterKillCount = (data.monsterKillCount ?? 0) | 0
+    rageConsumedTotal = (data.rageConsumedTotal ?? 0) | 0
     if (data.damageByType && typeof data.damageByType === 'object') {
       damageByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0, ...data.damageByType }
     }
@@ -444,6 +463,7 @@ function loadGame() {
     if (Array.isArray(data.enemies) && data.enemies.length > 0) {
       enemies = data.enemies.map(e => ({
         ...e,
+        x: (e.x > WORLD_WIDTH ? WORLD_WIDTH - SPAWN_MARGIN : e.x),
         alive: true,
         attackCooldown: e.attackCooldown || 0
       }))
@@ -473,6 +493,7 @@ function loadGame() {
 function updateLayout() {
   const w = canvas.width
   const h = canvas.height
+  gameWidth = w
   gameTop = TOP_SAFE_MARGIN
   const restH = h - TOP_SAFE_MARGIN
   gameHeight = Math.floor(restH * GAME_HEIGHT_RATIO)
@@ -499,6 +520,8 @@ function isSynergyActive(idx) {
 
 function isSkillConsumedBySynergy(skillId) {
   if (skillId >= BASE_SKILL_COUNT) return false
+  if (skillId === SKILL_XUANFENG_ID && monsterKillCount >= MONSTER_KILL_FOR_XUANFENG_DEVOUR) return true
+  if (skillId === SKILL_BAONU_ID && rageConsumedTotal >= RAGE_CONSUMED_FOR_BAONU_DEVOUR) return true
   for (let i = 0; i < SYNERGIES.length; i++) {
     if (!isSynergyActive(i)) continue
     const s = SYNERGIES[i]
@@ -556,7 +579,48 @@ function getSkillIdAtSlot(slotIndex) {
   return list[slotIndex].skillId
 }
 
-// 若选择技能 id 后能激活的套装（仅基础技能参与套装）
+// 该技能所属的吞噬（基础技能可属多个，进阶技能属对应池）
+function getSynergiesForSkill(skillId) {
+  if (skillId >= BASE_SKILL_COUNT) {
+    const pool = getAdvancedPoolName(skillId)
+    return pool ? [pool] : []
+  }
+  const list = []
+  for (let i = 0; i < SYNERGIES.length; i++)
+    if (SYNERGIES[i].req.includes(skillId)) list.push(SYNERGIES[i].name)
+  return list
+}
+
+// 该技能所属各吞噬的收集进度：[{ name, current, total }]，用于技能栏内展示
+function getSynergyProgressForSkill(skillId) {
+  if (skillId === SKILL_XUANFENG_ID) {
+    const label = MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀'
+    return [{ name: label, current: Math.min(monsterKillCount, MONSTER_KILL_FOR_XUANFENG_DEVOUR), total: MONSTER_KILL_FOR_XUANFENG_DEVOUR }]
+  }
+  if (skillId === SKILL_BAONU_ID) {
+    const label = RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气'
+    return [{ name: label, current: Math.min(rageConsumedTotal, RAGE_CONSUMED_FOR_BAONU_DEVOUR), total: RAGE_CONSUMED_FOR_BAONU_DEVOUR }]
+  }
+  if (skillId >= BASE_SKILL_COUNT) {
+    const pool = getAdvancedPoolName(skillId)
+    if (!pool) return []
+    const idx = SYNERGIES.findIndex(s => s.name === pool)
+    if (idx < 0) return []
+    const s = SYNERGIES[idx]
+    const current = s.req.filter(id => isLearned(id)).length
+    return [{ name: pool, current, total: s.req.length }]
+  }
+  const list = []
+  for (let i = 0; i < SYNERGIES.length; i++) {
+    const s = SYNERGIES[i]
+    if (!s.req.includes(skillId)) continue
+    const current = s.req.filter(id => isLearned(id)).length
+    list.push({ name: s.name, current, total: s.req.length })
+  }
+  return list
+}
+
+// 若选择技能 id 后能激活的吞噬（仅基础技能参与）
 function getSynergiesIfChoose(skillId) {
   if (skillId >= BASE_SKILL_COUNT) return []
   const list = []
@@ -569,14 +633,15 @@ function getSynergiesIfChoose(skillId) {
   return list
 }
 
-// 每个套装的收集情况：{ name, status: 'active'|'lack1'|'none', lackName? }
+// 每个吞噬的收集情况：{ name, status: 'active'|'lack1'|'none', lackName?, consumedNames? }
 function getSynergyProgress() {
   const result = []
   for (let i = 0; i < SYNERGIES.length; i++) {
     const s = SYNERGIES[i]
     const learned = s.req.filter(id => isLearned(id)).length
     if (learned === s.req.length) {
-      result.push({ name: s.name, status: 'active' })
+      const consumedNames = s.req.map(id => (SKILL_POOL[id] && SKILL_POOL[id].name) || ('id' + id))
+      result.push({ name: s.name, status: 'active', consumedNames })
     } else if (learned === 1) {
       const lackId = s.req.find(id => !isLearned(id))
       result.push({ name: s.name, status: 'lack1', lackName: SKILL_POOL[lackId].name })
@@ -587,8 +652,25 @@ function getSynergyProgress() {
   return result
 }
 
+// 职业开局三技能 id（前三次升级只能从这三个里抽，抽完后再从全池抽）
+function getStarterSkillIds() {
+  return (getHeroClass().startSkillIds || []).slice()
+}
+
 function fillSkillChoices() {
-  const available = []
+  const starterIds = getStarterSkillIds()
+  const starterNotLearned = starterIds.filter(id => !isLearned(id))
+  let available = []
+  if (starterNotLearned.length > 0) {
+    available = starterNotLearned.slice()
+    for (let i = available.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[available[i], available[j]] = [available[j], available[i]]
+    }
+    skill_choices = available
+    skill_choice_count = available.length
+    return
+  }
   for (let i = 0; i < SKILL_POOL.length; i++)
     if (!isLearned(i)) available.push(i)
   for (let i = 0; i < SYNERGIES.length; i++) {
@@ -646,6 +728,17 @@ function getLearnedHasteBonus() {
   return sum
 }
 
+function getSynergyHasteBonus() {
+  let sum = 0
+  for (let i = 0; i < SYNERGIES.length; i++)
+    if (isSynergyActive(i) && SYNERGIES[i].hasteBonus) sum += SYNERGIES[i].hasteBonus
+  return sum
+}
+
+function getEffectiveHaste() {
+  return playerHaste + getLearnedHasteBonus() + getSynergyHasteBonus()
+}
+
 function getCritChance() {
   const crit = getEffectiveCrit()
   if (crit <= 0) return 0
@@ -679,11 +772,9 @@ function computeAttackInterval() {
     const id = learned_skill_ids[i]
     if (id >= 0 && id < all.length && !all[id].isActive) mul *= all[id].speedMul
   }
-  for (let i = 0; i < SYNERGIES.length; i++)
-    if (isSynergyActive(i)) mul *= SYNERGIES[i].speedMul
   let interval = baseInterval / mul / playerSpeedMul
   if (skillXueBuff > 0) interval /= 1.2
-  const effectiveHaste = playerHaste + getLearnedHasteBonus()
+  const effectiveHaste = getEffectiveHaste()
   if (effectiveHaste > 0) interval /= (1 + effectiveHaste / HASTE_PCT_DENOM)
   return interval
 }
@@ -700,6 +791,7 @@ function castSkillXue() {
   if (target.hp <= 0) {
     target.alive = false
     killCount++
+    monsterKillCount++
     playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
     giveExp(target.isBoss ? EXP_BOSS : EXP_PER_KILL)
     if (!target.isBoss) tryDropEquipment()
@@ -731,6 +823,7 @@ function castSkillXuanFeng() {
     if (target.hp <= 0) {
       target.alive = false
       killCount++
+      monsterKillCount++
       playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
       giveExp(target.isBoss ? EXP_BOSS : EXP_PER_KILL)
       if (!target.isBoss) tryDropEquipment()
@@ -751,7 +844,9 @@ function castSkillBaoNu() {
   const target = findTarget()
   if (!target) return
   playerRage = Math.max(0, playerRage - SKILL_BAONU_RAGE_COST)
-  const critResult = applyCrit(computeAttack() * SKILL_BAONU_DAMAGE_MUL)
+  rageConsumedTotal += SKILL_BAONU_RAGE_COST
+  const baseDamage = (playerStr * SKILL_BAONU_STR_FACTOR + computeAttack()) * SKILL_BAONU_PCT
+  const critResult = applyCrit(baseDamage)
   addDamage('baonu', critResult.damage)
   target.hp -= critResult.damage
   effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
@@ -759,6 +854,7 @@ function castSkillBaoNu() {
   if (target.hp <= 0) {
     target.alive = false
     killCount++
+    monsterKillCount++
     playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
     giveExp(target.isBoss ? EXP_BOSS : EXP_PER_KILL)
     if (!target.isBoss) tryDropEquipment()
@@ -790,6 +886,7 @@ function applyCleaveDamage(mainTarget, mainDamage) {
     if (e.hp <= 0) {
       e.alive = false
       killCount++
+      monsterKillCount++
       playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
       giveExp(e.isBoss ? EXP_BOSS : EXP_PER_KILL)
       if (!e.isBoss) tryDropEquipment()
@@ -893,6 +990,8 @@ function resetGame() {
   timeSinceAttack = 0
   gameOver = false
   killCount = 0
+  monsterKillCount = 0
+  rageConsumedTotal = 0
   playerGold = 0
   damageByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0 }
   hitCountByType = { normal: 0, xue: 0, xuanfeng: 0, cleave: 0, baonu: 0 }
@@ -910,7 +1009,7 @@ function resetGame() {
   playerLevel = 1
   playerExp = 0
   playerExpToNext = BASE_EXP_TO_NEXT
-  learned_skill_ids = (getHeroClass().startSkillIds || []).slice()
+  learned_skill_ids = []
   skill_choices = []
   skill_choice_count = 0
   skillRefreshChances = 0
@@ -960,7 +1059,6 @@ function spawnEnemy() {
     }
   }
   if (slot < 0 && enemies.length >= MAX_ENEMIES) return
-  const w = canvas.width
   const yMin = gameTop + GAME_MARGIN_Y
   const yMax = gameTop + gameHeight - GAME_MARGIN_Y
   const isBoss = (wave % 5 === 0) && (spawnsThisWave === 0)
@@ -968,7 +1066,7 @@ function spawnEnemy() {
   const maxHp = isBoss ? waveHp * BOSS_HP_MUL : waveHp
   const speed = isBoss ? ENEMY_SPEED * BOSS_SPEED_MUL : ENEMY_SPEED
   const e = {
-    x: w - SPAWN_MARGIN,
+    x: WORLD_WIDTH - SPAWN_MARGIN,
     y: yMin + Math.random() * (yMax - yMin),
     hp: maxHp,
     maxHp: maxHp,
@@ -992,7 +1090,9 @@ function spawnEnemy() {
 
 function isInAttackRange(ex) {
   const r = getAttackRadius()
-  const dx = ex.x - PLAYER_X
+  const playerSx = worldToScreenX(PLAYER_X)
+  const exSx = worldToScreenX(ex.x)
+  const dx = exSx - playerSx
   const dy = ex.y - playerY
   if (dx < 0) return false
   return dx * dx + dy * dy <= r * r
@@ -1002,10 +1102,11 @@ function findTarget() {
   let best = null
   let bestD2 = 1e9
   const r2 = getAttackRadius() * getAttackRadius()
+  const playerSx = worldToScreenX(PLAYER_X)
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i]
     if (!e.alive) continue
-    const dx = e.x - PLAYER_X
+    const dx = worldToScreenX(e.x) - playerSx
     const dy = e.y - playerY
     if (dx < 0) continue
     const d2 = dx * dx + dy * dy
@@ -1020,11 +1121,12 @@ function findTarget() {
 // 返回攻击范围内最多 maxN 个敌人，按距离从近到远
 function getEnemiesInRange(maxN) {
   const r2 = getAttackRadius() * getAttackRadius()
+  const playerSx = worldToScreenX(PLAYER_X)
   const list = []
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i]
     if (!e.alive) continue
-    const dx = e.x - PLAYER_X
+    const dx = worldToScreenX(e.x) - playerSx
     const dy = e.y - playerY
     if (dx < 0) continue
     const d2 = dx * dx + dy * dy
@@ -1160,7 +1262,6 @@ function loop(timestamp) {
     requestAnimationFrame(loop)
     return
   }
-
   // 波次间隔倒计时或按波次生成怪
   if (!gameEnded) {
     if (waveBreakCountdown > 0) {
@@ -1175,7 +1276,7 @@ function loop(timestamp) {
     }
   }
 
-  const effectiveHaste = playerHaste + getLearnedHasteBonus()
+  const effectiveHaste = getEffectiveHaste()
   const hasteFactor = 1 + effectiveHaste / HASTE_PCT_DENOM
   skillXueCd = Math.max(0, skillXueCd - dt * hasteFactor)
   skillXueBuff = Math.max(0, skillXueBuff - dt)
@@ -1201,6 +1302,7 @@ function loop(timestamp) {
         if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
         target.alive = false
         killCount++
+        monsterKillCount++
         playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
         giveExp(target.isBoss ? EXP_BOSS : EXP_PER_KILL)
         if (!target.isBoss) tryDropEquipment()
@@ -1364,12 +1466,14 @@ function drawSkillChoiceOverlay(w, h) {
   const cardH = 98
   const blockTop = 24
   const titleH = 48
+  const overlaySlotRowH = SKILL_BAR_SLOT_H
+  const slotRowMargin = 10
   const cardsH = cardH + 8
   const skipH = 44
   const synTitleH = 22
   const synLineH = 18
   const synCount = 5
-  const totalH = blockTop + titleH + cardsH + skipH + synTitleH + synCount * synLineH + 16
+  const totalH = blockTop + titleH + overlaySlotRowH + slotRowMargin + cardsH + skipH + synTitleH + synCount * synLineH + 18 + 18
   const startY = (h - totalH) / 2
 
   let y = startY + blockTop
@@ -1395,6 +1499,65 @@ function drawSkillChoiceOverlay(w, h) {
   else if (slotsFull) y += 40
   else if (unlockedNames.length > 0) y += 36
   else y += 28
+
+  const slotRowY = y + 4
+  const slotAreaW = w - 32
+  const slotGap = SKILL_BAR_SLOT_GAP
+  const slotH = SKILL_BAR_SLOT_H
+  const slotW = slotAreaW > 0 ? Math.max(0, Math.floor((slotAreaW - slotGap * (MAX_SKILL_SLOTS - 1)) / MAX_SKILL_SLOTS)) : 0
+  const slotStartX = 16
+  const skillsInSlots = getSkillsInSlots()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  for (let i = 0; i < MAX_SKILL_SLOTS; i++) {
+    const sx = slotStartX + i * (slotW + slotGap)
+    const filled = skillsInSlots[i]
+    roundRect(sx, slotRowY, slotW, slotH, UI.radiusSm)
+    if (filled) {
+      ctx.fillStyle = filled.isAdvanced ? UI.bgCardAlt : UI.bgCard
+      ctx.fill()
+      ctx.strokeStyle = filled.isAdvanced ? UI.primary : UI.border
+      ctx.lineWidth = 1
+      ctx.stroke()
+      const nameY = 18
+      ctx.font = (filled.name.length > 2 ? '10px' : '11px') + ' sans-serif'
+      ctx.fillStyle = filled.isAdvanced ? UI.primary : UI.text
+      ctx.fillText(filled.name.length > 2 ? filled.name.slice(0, 2) : filled.name, sx + slotW / 2, slotRowY + nameY)
+      const progressList = getSynergyProgressForSkill(filled.skillId)
+      if (progressList.length > 0) {
+        const isXuanfengProgress = filled.skillId === SKILL_XUANFENG_ID && progressList[0].name === (MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀')
+        const isBaonuProgress = filled.skillId === SKILL_BAONU_ID && progressList[0].name === (RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气')
+        const progressFont = ((isXuanfengProgress || isBaonuProgress) && slotW < 42) ? '8px' : '9px'
+        ctx.font = progressFont + ' sans-serif'
+        ctx.fillStyle = progressList.every(p => p.current >= p.total) ? UI.success : UI.textMuted
+        if (isXuanfengProgress) {
+          ctx.textBaseline = 'top'
+          ctx.fillText(MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀后吞噬', sx + slotW / 2, slotRowY + 26)
+          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.textBaseline = 'middle'
+        } else if (isBaonuProgress) {
+          ctx.textBaseline = 'top'
+          ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, slotRowY + 26)
+          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.textBaseline = 'middle'
+        } else {
+          const progressStr = progressList.map(p => p.name + p.current + '/' + p.total).join(' ')
+          ctx.fillText(progressStr, sx + slotW / 2, slotRowY + slotH - 12)
+        }
+      }
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'
+      ctx.fill()
+      ctx.strokeStyle = UI.textMuted
+      ctx.lineWidth = 1
+      ctx.stroke()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = UI.textMuted
+      ctx.fillText('空', sx + slotW / 2, slotRowY + slotH / 2)
+    }
+  }
+  ctx.textBaseline = 'alphabetic'
+  y = slotRowY + slotH + slotRowMargin
 
   const cardY = y
   skillChoiceRects = []
@@ -1423,11 +1586,19 @@ function drawSkillChoiceOverlay(w, h) {
     ctx.fillStyle = UI.textDim
     ctx.font = '11px sans-serif'
     ctx.fillText('攻×' + sk.attackMul + ' 速×' + sk.speedMul, x + cardW / 2, cardY + 50)
+    const belongTo = getSynergiesForSkill(id)
     const canActivate = getSynergiesIfChoose(id)
+    let lineY = cardY + 62
+    if (belongTo.length > 0) {
+      ctx.fillStyle = UI.textMuted
+      ctx.font = '10px sans-serif'
+      ctx.fillText('所属吞噬：' + belongTo.join('、'), x + cardW / 2, lineY)
+      lineY += 14
+    }
     if (canActivate.length > 0) {
       ctx.fillStyle = UI.success
       ctx.font = '11px sans-serif'
-      ctx.fillText('可组成：' + canActivate.join('、'), x + cardW / 2, cardY + 72)
+      ctx.fillText('可激活吞噬：' + canActivate.join('、'), x + cardW / 2, lineY)
     }
     skillChoiceRects.push({ x, y: cardY, w: cardW, h: cardH })
   }
@@ -1467,7 +1638,7 @@ function drawSkillChoiceOverlay(w, h) {
   ctx.fillStyle = UI.textDim
   ctx.font = 'bold 12px sans-serif'
   ctx.textAlign = 'left'
-  ctx.fillText('套装收集情况', 16, y + 14)
+  ctx.fillText('吞噬收集情况', 16, y + 14)
   y += synTitleH
 
   const progress = getSynergyProgress()
@@ -1475,7 +1646,8 @@ function drawSkillChoiceOverlay(w, h) {
     const p = progress[i]
     if (p.status === 'active') {
       ctx.fillStyle = UI.success
-      ctx.fillText(p.name + ' ✓', 16, y + 14)
+      const consumedStr = (p.consumedNames && p.consumedNames.length) ? '（' + p.consumedNames.join('、') + ' 已吞噬）' : ''
+      ctx.fillText(p.name + ' ✓ ' + consumedStr, 16, y + 14)
     } else if (p.status === 'lack1') {
       ctx.fillStyle = UI.primary
       ctx.fillText(p.name + ' 缺 ' + p.lackName, 16, y + 14)
@@ -1484,6 +1656,12 @@ function drawSkillChoiceOverlay(w, h) {
       ctx.fillText(p.name + ' —', 16, y + 14)
     }
     y += synLineH
+  }
+  const activeCount = progress.filter(p => p.status === 'active').length
+  if (activeCount > 0) {
+    ctx.fillStyle = UI.textMuted
+    ctx.font = '11px sans-serif'
+    ctx.fillText('激活后，组成技能不占栏位，效果保留', 16, y + 12)
   }
 
   ctx.textAlign = 'left'
@@ -1496,10 +1674,10 @@ function drawReplaceTargetOverlay(w, h) {
   const allSkills = getAllSkills()
   const newSkill = pendingReplaceSkillId != null && allSkills[pendingReplaceSkillId] ? allSkills[pendingReplaceSkillId].name : '?'
   const pad = 20
-  const slotGap = 8
-  const slotH = 40
-  const slotsPerRow = Math.min(4, MAX_SKILL_SLOTS)
-  const slotW = Math.floor((w - pad * 2 - slotGap * (slotsPerRow - 1)) / slotsPerRow)
+  const slotGap = SKILL_BAR_SLOT_GAP
+  const slotH = SKILL_BAR_SLOT_H
+  const slotAreaW = w - pad * 2
+  const slotW = slotAreaW > 0 ? Math.max(0, Math.floor((slotAreaW - slotGap * (MAX_SKILL_SLOTS - 1)) / MAX_SKILL_SLOTS)) : 0
   let startY = 80
   ctx.fillStyle = UI.primary
   ctx.font = 'bold 18px sans-serif'
@@ -1512,27 +1690,59 @@ function drawReplaceTargetOverlay(w, h) {
 
   replaceSlotRects = []
   const skillsInSlots = getSkillsInSlots()
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
   for (let i = 0; i < MAX_SKILL_SLOTS; i++) {
-    const row = Math.floor(i / slotsPerRow)
-    const col = i % slotsPerRow
-    const sx = pad + col * (slotW + slotGap)
-    const sy = startY + row * (slotH + slotGap)
+    const sx = pad + i * (slotW + slotGap)
+    const sy = startY
     const filled = skillsInSlots[i]
     roundRect(sx, sy, slotW, slotH, UI.radiusSm)
-    ctx.fillStyle = filled ? UI.bgCard : UI.bgCardAlt
-    ctx.fill()
-    ctx.strokeStyle = filled ? UI.border : UI.textMuted
-    ctx.lineWidth = 1.5
-    ctx.stroke()
-    ctx.fillStyle = filled ? UI.text : UI.textMuted
-    ctx.font = filled && filled.name.length > 4 ? '11px sans-serif' : '13px sans-serif'
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(filled ? filled.name : '空', sx + slotW / 2, sy + slotH / 2)
+    if (filled) {
+      ctx.fillStyle = filled.isAdvanced ? UI.bgCardAlt : UI.bgCard
+      ctx.fill()
+      ctx.strokeStyle = filled.isAdvanced ? UI.primary : UI.border
+      ctx.lineWidth = 1
+      ctx.stroke()
+      ctx.font = (filled.name.length > 2 ? '10px' : '11px') + ' sans-serif'
+      ctx.fillStyle = filled.isAdvanced ? UI.primary : UI.text
+      ctx.fillText(filled.name.length > 2 ? filled.name.slice(0, 2) : filled.name, sx + slotW / 2, sy + 18)
+      const progressList = getSynergyProgressForSkill(filled.skillId)
+      if (progressList.length > 0) {
+        const isXuanfengProgress = filled.skillId === SKILL_XUANFENG_ID && progressList[0].name === (MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀')
+        const isBaonuProgress = filled.skillId === SKILL_BAONU_ID && progressList[0].name === (RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气')
+        const progressFont = ((isXuanfengProgress || isBaonuProgress) && slotW < 42) ? '8px' : '9px'
+        ctx.font = progressFont + ' sans-serif'
+        ctx.fillStyle = progressList.every(p => p.current >= p.total) ? UI.success : UI.textMuted
+        if (isXuanfengProgress) {
+          ctx.textBaseline = 'top'
+          ctx.fillText(MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀后吞噬', sx + slotW / 2, sy + 26)
+          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, sy + 36)
+          ctx.textBaseline = 'middle'
+        } else if (isBaonuProgress) {
+          ctx.textBaseline = 'top'
+          ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, sy + 26)
+          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, sy + 36)
+          ctx.textBaseline = 'middle'
+        } else {
+          const progressStr = progressList.map(p => p.name + p.current + '/' + p.total).join(' ')
+          ctx.fillText(progressStr, sx + slotW / 2, sy + slotH - 12)
+        }
+      }
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.25)'
+      ctx.fill()
+      ctx.strokeStyle = UI.textMuted
+      ctx.lineWidth = 1
+      ctx.stroke()
+      ctx.font = '10px sans-serif'
+      ctx.fillStyle = UI.textMuted
+      ctx.fillText('空', sx + slotW / 2, sy + slotH / 2)
+    }
     replaceSlotRects.push({ x: sx, y: sy, w: slotW, h: slotH })
   }
-  const lastRow = Math.floor((MAX_SKILL_SLOTS - 1) / slotsPerRow)
-  let cancelY = startY + (lastRow + 1) * (slotH + slotGap) + 20
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+  const cancelY = startY + slotH + 20
   const cancelW = 120
   const cancelH = 40
   const cancelX = (w - cancelW) / 2
@@ -1543,7 +1753,9 @@ function drawReplaceTargetOverlay(w, h) {
   ctx.stroke()
   ctx.fillStyle = UI.text
   ctx.font = 'bold 16px sans-serif'
-  ctx.fillText('取消', w / 2, cancelY + cancelH / 2)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('取消', cancelX + cancelW / 2, cancelY + cancelH / 2)
   replaceCancelRect = { x: cancelX, y: cancelY, w: cancelW, h: cancelH }
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
@@ -1616,9 +1828,10 @@ function drawGame(w, h) {
   ctx.fillStyle = 'rgba(0,0,0,0.25)'
   ctx.fillRect(0, gameTop, w, gameHeight)
 
+  const playerSx = worldToScreenX(PLAYER_X)
   const attackRadius = getAttackRadius()
   ctx.save()
-  ctx.translate(PLAYER_X, playerY)
+  ctx.translate(playerSx, playerY)
   ctx.beginPath()
   ctx.arc(0, 0, attackRadius, -Math.PI / 2, Math.PI / 2)
   ctx.closePath()
@@ -1631,13 +1844,13 @@ function drawGame(w, h) {
 
   ctx.fillStyle = UI.primary
   ctx.beginPath()
-  ctx.arc(PLAYER_X, playerY, 14, 0, Math.PI * 2)
+  ctx.arc(playerSx, playerY, 14, 0, Math.PI * 2)
   ctx.fill()
   ctx.strokeStyle = UI.border
   ctx.lineWidth = 1.5
   ctx.stroke()
   const barW = 60
-  const barX = PLAYER_X - barW / 2
+  const barX = playerSx - barW / 2
   const barY = playerY - 28
   roundRect(barX, barY, barW, 6, 3)
   ctx.fillStyle = 'rgba(0,0,0,0.4)'
@@ -1659,10 +1872,11 @@ function drawGame(w, h) {
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i]
     if (!e.alive) continue
+    const ex = worldToScreenX(e.x)
     const radius = e.isBoss ? 14 : 10
     ctx.fillStyle = e.isBoss ? '#8b5cf6' : UI.danger
     ctx.beginPath()
-    ctx.arc(e.x, e.y, radius, 0, Math.PI * 2)
+    ctx.arc(ex, e.y, radius, 0, Math.PI * 2)
     ctx.fill()
     ctx.strokeStyle = UI.border
     ctx.lineWidth = 1.5
@@ -1671,41 +1885,42 @@ function drawGame(w, h) {
       ctx.fillStyle = UI.text
       ctx.font = 'bold 10px sans-serif'
       ctx.textAlign = 'center'
-      ctx.fillText('Boss', e.x, e.y - radius - 4)
+      ctx.fillText('Boss', ex, e.y - radius - 4)
       ctx.textAlign = 'left'
     }
     const eBarW = e.isBoss ? 56 : 40
-    roundRect(e.x - eBarW / 2, e.y - radius - 14, eBarW, 5, 2)
+    roundRect(ex - eBarW / 2, e.y - radius - 14, eBarW, 5, 2)
     ctx.fillStyle = 'rgba(0,0,0,0.4)'
     ctx.fill()
-    roundRect(e.x - eBarW / 2, e.y - radius - 14, eBarW * (e.hp / e.maxHp), 5, 2)
+    roundRect(ex - eBarW / 2, e.y - radius - 14, eBarW * (e.hp / e.maxHp), 5, 2)
     ctx.fillStyle = e.isBoss ? '#a78bfa' : '#f97316'
     ctx.fill()
     ctx.fillStyle = UI.text
     ctx.font = '9px sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText(Math.ceil(e.hp) + '/' + e.maxHp, e.x, e.y - radius - 20)
+    ctx.fillText(Math.ceil(e.hp) + '/' + e.maxHp, ex, e.y - radius - 20)
     ctx.textAlign = 'left'
   }
 
   for (let i = 0; i < effects.length; i++) {
     const ef = effects[i]
+    const efx = (ef.x != null) ? worldToScreenX(ef.x) : playerSx
     if (ef.type === 'hit') {
       const alpha = Math.max(0, ef.life / 0.2)
       ctx.fillStyle = 'rgba(232,168,74,' + alpha * 0.8 + ')'
       ctx.beginPath()
-      ctx.arc(ef.x, ef.y, 8 + (1 - alpha) * 6, 0, Math.PI * 2)
+      ctx.arc(efx, ef.y, 8 + (1 - alpha) * 6, 0, Math.PI * 2)
       ctx.fill()
     } else if (ef.type === 'hurt') {
       const alpha = Math.max(0, ef.life / 0.25)
       ctx.fillStyle = 'rgba(201,74,74,' + alpha * 0.5 + ')'
       ctx.beginPath()
-      ctx.arc(ef.x, ef.y, 20, 0, Math.PI * 2)
+      ctx.arc(efx, ef.y, 20, 0, Math.PI * 2)
       ctx.fill()
     } else if (ef.type === 'crit') {
       const alpha = Math.max(0, ef.life / 0.6)
       ctx.save()
-      ctx.translate(ef.x, ef.y - 24 - (1 - alpha) * 8)
+      ctx.translate(efx, ef.y - 24 - (1 - alpha) * 8)
       ctx.fillStyle = 'rgba(232,168,74,' + alpha + ')'
       ctx.strokeStyle = 'rgba(180,100,0,' + alpha * 0.9 + ')'
       ctx.lineWidth = 2
@@ -1726,7 +1941,7 @@ function drawGame(w, h) {
     if (alpha <= 0) continue
     const driftY = (1 - ef.life / maxLife) * 14
     const stackOff = (ef.stackIndex != null ? ef.stackIndex : 0) * 22
-    const px = (ef.x != null ? ef.x : PLAYER_X)
+    const px = (ef.x != null ? worldToScreenX(ef.x) : playerSx)
     const py = (ef.y != null ? ef.y : playerY) - 26 - driftY - stackOff
     ctx.save()
     ctx.globalAlpha = 1
@@ -1792,7 +2007,7 @@ function drawPanel(w, h) {
   const gap = 16
   const btnW = 100
   const btnH = 44
-  const slotRowH = 38
+  const slotRowH = SKILL_BAR_SLOT_H
   const slotRowY = panelTop + 28
   const equipRowH = 22
   const equipRowY = slotRowY + slotRowH + 16
@@ -1831,11 +2046,13 @@ function drawPanel(w, h) {
 
   ctx.fillStyle = UI.textMuted
   ctx.font = '11px sans-serif'
-  ctx.fillText('技能栏 ' + getEffectiveSlotsUsed() + '/' + MAX_SKILL_SLOTS, gap, panelTop + 14)
+  const effectiveSlots = getEffectiveSlotsUsed()
+  const hasConsumed = learned_skill_ids.some(id => isSkillConsumedBySynergy(id))
+  ctx.fillText('技能栏 ' + effectiveSlots + '/' + MAX_SKILL_SLOTS + (hasConsumed ? '（已吞噬不占位）' : ''), gap, panelTop + 14)
   const slotAreaW = Math.max(0, w - gap * 2 - btnW - gap - 8)
-  const slotGap = 4
-  const slotH = 38
-  const slotW = slotAreaW > 0 ? Math.max(0, Math.floor((slotAreaW - slotGap * 6) / 7)) : 0
+  const slotGap = SKILL_BAR_SLOT_GAP
+  const slotH = slotRowH
+  const slotW = slotAreaW > 0 ? Math.max(0, Math.floor((slotAreaW - slotGap * (MAX_SKILL_SLOTS - 1)) / MAX_SKILL_SLOTS)) : 0
   const slotStartX = gap
   const skillsInSlots = getSkillsInSlots()
   ctx.textAlign = 'center'
@@ -1901,26 +2118,49 @@ function drawPanel(w, h) {
         ctx.fillStyle = UI.primary
         ctx.fill()
       }
+      const nameY = filled.isActive ? 12 : 18
       ctx.font = (filled.name.length > 2 ? '10px' : '11px') + ' sans-serif'
       ctx.fillStyle = filled.isAdvanced ? UI.primary : (filled.isActive && activeCd > 0 ? UI.textMuted : UI.text)
-      ctx.fillText(filled.name.length > 2 ? filled.name.slice(0, 2) : filled.name, sx + slotW / 2, slotRowY + (filled.isActive ? 10 : slotH / 2))
+      ctx.fillText(filled.name.length > 2 ? filled.name.slice(0, 2) : filled.name, sx + slotW / 2, slotRowY + nameY)
       if (filled.isActive) {
         ctx.font = '9px sans-serif'
         if (filled.skillId === SKILL_XUE_ID && activeBuff) {
           ctx.fillStyle = UI.primary
-          ctx.fillText('攻速+', sx + slotW / 2, slotRowY + 24)
+          ctx.fillText('攻速+', sx + slotW / 2, slotRowY + 26)
         } else if (filled.skillId === SKILL_XUANFENG_ID && skillShunpiBuff > 0 && activeCd <= 0) {
           ctx.fillStyle = UI.primary
-          ctx.fillText('顺劈', sx + slotW / 2, slotRowY + 24)
+          ctx.fillText('顺劈', sx + slotW / 2, slotRowY + 26)
         } else if (filled.skillId === SKILL_BAONU_ID) {
           ctx.fillStyle = playerRage >= SKILL_BAONU_RAGE_COST ? UI.primary : UI.textMuted
-          ctx.fillText(playerRage >= SKILL_BAONU_RAGE_COST ? '就绪' : '怒气不足', sx + slotW / 2, slotRowY + 24)
+          ctx.fillText(playerRage >= SKILL_BAONU_RAGE_COST ? '就绪' : '怒气不足', sx + slotW / 2, slotRowY + 26)
         } else if (activeCd > 0) {
           ctx.fillStyle = UI.textMuted
-          ctx.fillText('CD ' + Math.ceil(activeCd) + 's', sx + slotW / 2, slotRowY + 24)
+          ctx.fillText('CD ' + Math.ceil(activeCd) + 's', sx + slotW / 2, slotRowY + 26)
         } else {
           ctx.fillStyle = UI.primary
-          ctx.fillText('就绪', sx + slotW / 2, slotRowY + 24)
+          ctx.fillText('就绪', sx + slotW / 2, slotRowY + 26)
+        }
+      }
+      const progressList = getSynergyProgressForSkill(filled.skillId)
+      if (progressList.length > 0) {
+        const isXuanfengProgress = filled.skillId === SKILL_XUANFENG_ID && progressList[0].name === (MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀')
+        const isBaonuProgress = filled.skillId === SKILL_BAONU_ID && progressList[0].name === (RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气')
+        const progressFont = ((isXuanfengProgress || isBaonuProgress) && slotW < 42) ? '8px' : '9px'
+        ctx.font = progressFont + ' sans-serif'
+        ctx.fillStyle = progressList.every(p => p.current >= p.total) ? UI.success : UI.textMuted
+        if (isXuanfengProgress) {
+          ctx.textBaseline = 'top'
+          ctx.fillText(MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀后吞噬', sx + slotW / 2, slotRowY + 26)
+          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.textBaseline = 'middle'
+        } else if (isBaonuProgress) {
+          ctx.textBaseline = 'top'
+          ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, slotRowY + 26)
+          ctx.fillText(progressList[0].current + '/' + progressList[0].total, sx + slotW / 2, slotRowY + 36)
+          ctx.textBaseline = 'middle'
+        } else {
+          const progressStr = progressList.map(p => p.name + p.current + '/' + p.total).join(' ')
+          ctx.fillText(progressStr, sx + slotW / 2, slotRowY + slotH - 12)
         }
       }
     } else {
@@ -1985,7 +2225,7 @@ function drawPanel(w, h) {
   ctx.fillStyle = UI.textDim
   ctx.fillText('力' + playerStr + ' 敏' + playerAgi + ' 智' + playerInt + '  ·  ' + (HERO_TYPES[heroType] || heroType) + ' · ' + getHeroClass().name, gap + 10, btnY + 46)
   const effectiveCritVal = getEffectiveCrit()
-  const effectiveHasteDisplay = playerHaste + getLearnedHasteBonus()
+  const effectiveHasteDisplay = getEffectiveHaste()
   const critPct = (getCritChance() * 100).toFixed(0)
   ctx.fillText('暴击 ' + effectiveCritVal + ' (' + critPct + '%)  极速 ' + effectiveHasteDisplay + ' (攻速/CD+' + effectiveHasteDisplay + '%)', gap + 10, btnY + 58)
   if (shopAttackPct > 0 || shopSpeedPct > 0) {
@@ -2005,23 +2245,54 @@ function drawPanel(w, h) {
   ctx.fillStyle = UI.primary
   ctx.font = 'bold 13px sans-serif'
   ctx.textAlign = 'left'
-  ctx.fillText('套装效果', gap + 10, synY + 22)
+  ctx.fillText('吞噬效果', gap + 10, synY + 22)
 
   const activeSynergies = []
   for (let i = 0; i < SYNERGIES.length; i++)
     if (isSynergyActive(i)) activeSynergies.push(SYNERGIES[i])
-  if (activeSynergies.length === 0) {
+  const xuanfengDevoured = isLearned(SKILL_XUANFENG_ID) && monsterKillCount >= MONSTER_KILL_FOR_XUANFENG_DEVOUR
+  const baonuDevoured = isLearned(SKILL_BAONU_ID) && rageConsumedTotal >= RAGE_CONSUMED_FOR_BAONU_DEVOUR
+  const hasAnyDevour = activeSynergies.length > 0 || xuanfengDevoured || baonuDevoured
+  if (!hasAnyDevour) {
     ctx.fillStyle = UI.textMuted
     ctx.font = '12px sans-serif'
-    ctx.fillText('获得技能并满足条件后在此显示', gap + 10, synY + 44)
+    ctx.fillText('激活吞噬后在此显示', gap + 10, synY + 44)
   } else {
     ctx.fillStyle = UI.textDim
     ctx.font = '12px sans-serif'
     let lineY = synY + 42
     for (let i = 0; i < activeSynergies.length; i++) {
       const s = activeSynergies[i]
+      const consumedNames = s.req.map(id => (SKILL_POOL[id] && SKILL_POOL[id].name) || '')
+      const consumedStr = consumedNames.filter(Boolean).join('、')
       ctx.fillText(s.name + '：' + s.effect, gap + 10, lineY)
-      lineY += 18
+      lineY += 16
+      ctx.fillStyle = UI.textMuted
+      ctx.font = '11px sans-serif'
+      ctx.fillText('已吞噬 ' + consumedStr + '，不占栏位', gap + 10, lineY)
+      lineY += 16
+      ctx.fillStyle = UI.textDim
+      ctx.font = '12px sans-serif'
+    }
+    if (xuanfengDevoured) {
+      ctx.fillText('旋风斩：' + MONSTER_KILL_FOR_XUANFENG_DEVOUR + '击杀已吞噬', gap + 10, lineY)
+      lineY += 16
+      ctx.fillStyle = UI.textMuted
+      ctx.font = '11px sans-serif'
+      ctx.fillText('已吞噬 旋风斩，不占栏位', gap + 10, lineY)
+      lineY += 16
+      ctx.fillStyle = UI.textDim
+      ctx.font = '12px sans-serif'
+    }
+    if (baonuDevoured) {
+      ctx.fillText('暴怒：' + RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气已吞噬', gap + 10, lineY)
+      lineY += 16
+      ctx.fillStyle = UI.textMuted
+      ctx.font = '11px sans-serif'
+      ctx.fillText('已吞噬 暴怒，不占栏位', gap + 10, lineY)
+      lineY += 16
+      ctx.fillStyle = UI.textDim
+      ctx.font = '12px sans-serif'
     }
   }
 
