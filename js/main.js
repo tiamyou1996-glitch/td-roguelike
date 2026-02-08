@@ -328,10 +328,10 @@ function getAdvancedPoolName(skillId) {
 // 商店商品：名称、价格、描述（打造武器价格动态，见 getForgeWeaponCost）
 const SHOP_ITEMS = [
   { name: '生命药水', cost: 15, desc: '恢复 15% 最大生命', healPct: 0.15 },
-  { name: '打磨武器', cost: 0, desc: '武器属性 +20%（下次价格 +30%）', isForge: true }
+  { name: '打磨武器', cost: 0, desc: '武器属性 +20%（下次价格 +50%）', isForge: true }
 ]
 const FORGE_WEAPON_BASE_PRICE = 10
-const FORGE_WEAPON_PRICE_MUL = 1.3
+const FORGE_WEAPON_PRICE_MUL = 1.5
 const FORGE_WEAPON_STAT_MUL = 1.2
 
 function getForgeWeaponCost() {
