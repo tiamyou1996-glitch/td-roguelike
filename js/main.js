@@ -155,7 +155,7 @@ const BOSS_HP_MUL = 6
 const BOSS_SPEED_MUL = 0.7
 const CHALLENGE_DURATION = 30       // 挑战 Boss 存在时间（秒），超时未击杀算失败
 const CHALLENGE_FIRST_BOSS_HP_PCT = 0.5  // 第一次挑战 Boss 血量 = 第一个游戏 Boss(第5波) 的 50%
-const CHALLENGE_GOLD_BASE = 100    // 第一次挑战成功奖励金币
+const CHALLENGE_GOLD_BASE = 20     // 第一次挑战成功奖励金币
 const CHALLENGE_GOLD_MUL = 1.5     // 后续每次奖励 +50%
 const FIRST_BOSS_WAVE = 5           // 第一个游戏 Boss 所在波次
 const BASE_EXP_TO_NEXT = 10
