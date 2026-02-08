@@ -34,6 +34,50 @@ function roundRect(x, y, w, h, r) {
   ctx.closePath()
 }
 
+// 史莱姆：受击时短暂压扁（用于 drawSlimeBody）
+function setEnemySquash(e) {
+  if (!e) return
+  e.squashUntil = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) / 1000 + 0.14
+}
+
+// 史莱姆造型：椭圆果冻体 + 描边 + 高光；受击压扁、平时轻微抖动
+function drawSlimeBody(cx, cy, radius, isBoss, nowSec, e) {
+  const phase = e.wobblePhase != null ? e.wobblePhase : 0
+  let rx = radius
+  let ry = radius
+  const squashing = e.squashUntil != null && nowSec < e.squashUntil
+  if (squashing) {
+    rx = radius * 1.2
+    ry = radius * 0.65
+  } else {
+    ry = radius * (0.88 + 0.1 * Math.sin(nowSec * 5 + phase))
+  }
+  const bodyColor = isBoss ? 'rgba(139,92,246,0.92)' : 'rgba(34,197,94,0.9)'
+  const outlineColor = isBoss ? 'rgba(109,40,217,0.9)' : 'rgba(22,163,74,0.95)'
+  ctx.save()
+  ctx.translate(cx, cy)
+  ctx.beginPath()
+  if (ctx.ellipse) {
+    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2)
+  } else {
+    ctx.arc(0, 0, Math.max(rx, ry), 0, Math.PI * 2)
+  }
+  ctx.fillStyle = bodyColor
+  ctx.fill()
+  ctx.strokeStyle = outlineColor
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+  ctx.beginPath()
+  if (ctx.ellipse) {
+    ctx.ellipse(-rx * 0.35, -ry * 0.35, rx * 0.28, ry * 0.28, 0, 0, Math.PI * 2)
+  } else {
+    ctx.arc(-rx * 0.35, -ry * 0.35, radius * 0.25, 0, Math.PI * 2)
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.45)'
+  ctx.fill()
+  ctx.restore()
+}
+
 // 避头尾：不能出现在行首 / 行末的字符（中文排版）
 const KINSOKU_HEAD = '，。、．！？；：」）】』％）'
 const KINSOKU_TAIL = '「（【『'
@@ -157,6 +201,10 @@ const CHALLENGE_DURATION = 30       // 挑战 Boss 存在时间（秒），超�
 const CHALLENGE_FIRST_BOSS_HP_PCT = 0.5  // 第一次挑战 Boss 血量 = 第一个游戏 Boss(第5波) 的 50%
 const CHALLENGE_GOLD_BASE = 20     // 第一次挑战成功奖励金币
 const CHALLENGE_GOLD_MUL = 1.5     // 后续每次奖励 +50%
+const INSPIRATION_PER_SECOND = 1   // 灵感：每秒获得
+const INSPIRATION_PER_KILL = 1     // 灵感：每击杀一只怪获得
+const LEARN_SKILL_COST_BASE = 5    // 第一次学习技能消耗灵感
+const LEARN_SKILL_COST_CAP = 100   // 学习技能消耗上限（幂增长到此封顶）
 const FIRST_BOSS_WAVE = 5           // 第一个游戏 Boss 所在波次
 const BASE_EXP_TO_NEXT = 10
 const MAX_SKILL_SLOTS = 6
@@ -325,10 +373,9 @@ function getAdvancedPoolName(skillId) {
   return null
 }
 
-// 商店商品：名称、价格、描述（打造武器价格动态，见 getForgeWeaponCost）
+// 商店商品：名称、价格、描述（打磨武器已移至「游戏」抽屉第三张卡）
 const SHOP_ITEMS = [
-  { name: '生命药水', cost: 15, desc: '恢复 15% 最大生命', healPct: 0.15 },
-  { name: '打磨武器', cost: 0, desc: '武器属性 +20%（下次价格 +50%）', isForge: true }
+  { name: '生命药水', cost: 15, desc: '恢复 15% 最大生命', healPct: 0.15 }
 ]
 const FORGE_WEAPON_BASE_PRICE = 10
 const FORGE_WEAPON_PRICE_MUL = 1.5
@@ -381,6 +428,9 @@ let enrageTimeTotal = 0 // 处于激怒状态的累计秒数，用于激怒 20 �
 let skillEnrageTimeLearnedAt = {} // 学到「激怒20秒」技能时的 enrageTimeTotal，如 { 28: 0 }
 let totalBleedDamage = 0 // 累计造成的流血伤害，用于浴血之躯 10000 吞噬
 let playerGold = 0
+let playerInspiration = 0        // 灵感：每秒+1、每击杀+1，用于学习技能
+let skillLearnCount = 0          // 已学习技能次数（用于下次消耗计算：幂增长，封顶100）
+let choosingSkillByInspiration = false // 当前选技能界面是否由「学习技能」按钮打开（选完扣灵感）
 const DAMAGE_TYPE_NAMES = { normal: '普攻', xue: '嗜血', nuji: '怒击', xuanfeng: '旋风斩', cleave: '顺劈', baonu: '暴怒', baonu_aoe: '暴怒毁灭', zhansha: '斩杀', odin: '奥丁之怒', bleed: '流血' }
 const DAMAGE_TYPE_COLORS = { '普攻': '#3b82f6', '嗜血': '#e8a84a', '怒击': '#d97706', '旋风斩': '#a78bfa', '顺劈': '#22c55e', '暴怒': '#c2410c', '暴怒毁灭': '#9a3412', '斩杀': '#dc2626', '奥丁之怒': '#7c3aed', '流血': '#b91c1c' }
 let damageByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
@@ -440,15 +490,19 @@ let attributeOverlayOpen = false
 let attributeButtonRect = null
 let attributeCloseRect = null
 const TAB_BAR_HEIGHT = 44
-const TAB_IDS = ['challenge', 'attribute', 'damage', 'synergy', 'shop']
-const TAB_LABELS = ['挑战', '属性', '伤害统计', '吞噬效果', '商店']
-let bottomDrawerTab = null           // null | 'challenge' | 'attribute' | 'damage' | 'synergy'
+const TAB_IDS = ['game', 'attribute', 'damage', 'synergy', 'shop']
+const TAB_LABELS = ['游戏', '属性', '伤害统计', '吞噬效果', '商店']
+let bottomDrawerTab = null           // null | 'game' | 'attribute' | 'damage' | 'synergy' | 'shop'
 let drawerSlideProgress = 0         // 0..1 抽屉升起动画
 let tabRects = []                   // 4 个 tab 的 hit 区域
 let drawerCloseRect = null
 let drawerChallengeStartRect = null
+let drawerGameChallengeRect = null
+let drawerGameLearnSkillRect = null
+let drawerGameForgeBuyRect = null
 let lumangButtonRect = null
 let odinButtonRect = null
+let learnSkillButtonRect = null
 let challengeButtonRect = null
 let challengeCount = 0              // 已完成的挑战次数，用于下次挑战 Boss 血量翻倍
 let challengeTimer = 0              // 挑战倒计时，>0 表示挑战进行中
@@ -643,6 +697,8 @@ function saveGame() {
       playerHp,
       playerMaxHp,
       playerGold,
+      playerInspiration,
+      skillLearnCount,
       killCount,
       monsterKillCount,
       skillMonsterKillSinceLearned: { ...skillMonsterKillSinceLearned },
@@ -723,6 +779,8 @@ function loadGame() {
     playerMaxHp = data.playerMaxHp ?? (HP_BASE + playerSta * HP_PER_STA)
     playerHp = data.playerHp ?? playerMaxHp
     playerGold = data.playerGold || 0
+    playerInspiration = (data.playerInspiration ?? 0) | 0
+    skillLearnCount = (data.skillLearnCount ?? 0) | 0
     killCount = data.killCount || 0
     monsterKillCount = (data.monsterKillCount ?? 0) | 0
     skillMonsterKillSinceLearned = (data.skillMonsterKillSinceLearned && typeof data.skillMonsterKillSinceLearned === 'object') ? { ...data.skillMonsterKillSinceLearned } : {}
@@ -1318,12 +1376,13 @@ function castSkillXue() {
   const critResult = applyCrit(baseDmg)
   const finalDamage = applyMastery(critResult.damage)
   addDamage('xue', finalDamage)
-  target.hp -= finalDamage
+    target.hp -= finalDamage
   effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.2 })
   if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
   if (target.hp <= 0) {
     target.alive = false
     killCount++
+    if (!target.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
     monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
     playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1332,6 +1391,7 @@ function castSkillXue() {
     playSound('kill')
   } else {
     playSound('hit')
+    setEnemySquash(target)
   }
   let healPct = SKILL_XUE_HEAL_PCT + (isLearned(14) ? 0.10 : 0) // 寒光热血：额外回复 10%
   const hpPct = playerHp / playerMaxHp
@@ -1369,6 +1429,7 @@ function castSkillXuanFeng() {
     if (target.hp <= 0) {
       target.alive = false
       killCount++
+      if (!target.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
       monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
       playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1377,6 +1438,7 @@ function castSkillXuanFeng() {
       playSound('kill')
     } else {
       playSound('hit')
+      setEnemySquash(target)
     }
   }
   effects.push({ type: 'shout', text: '旋风斩', x: PLAYER_X, y: playerY, life: 1.1, maxLife: 1.1, stackIndex: getShoutStackIndex() })
@@ -1403,6 +1465,7 @@ function castSkillBaoNu() {
   if (target.hp <= 0) {
     target.alive = false
     killCount++
+    if (!target.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
     monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
     playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1411,6 +1474,7 @@ function castSkillBaoNu() {
     playSound('kill')
   } else {
     playSound('hit')
+    setEnemySquash(target)
   }
   enrageBuffRemaining = Math.max(enrageBuffRemaining, 4) // 暴怒进入激怒 4 秒
   applyWoundToTarget(target, finalDamage)
@@ -1430,6 +1494,7 @@ function castSkillBaoNu() {
       if (e.hp <= 0) {
         e.alive = false
         killCount++
+        if (!e.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
         monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
         playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1438,6 +1503,7 @@ function castSkillBaoNu() {
         playSound('kill')
       } else {
         playSound('hit')
+        setEnemySquash(e)
       }
     }
   }
@@ -1466,6 +1532,7 @@ function castSkillNuJi() {
   if (target.hp <= 0) {
     target.alive = false
     killCount++
+    if (!target.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
     monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
     playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1508,6 +1575,7 @@ function castSkillOdin() {
     if (e.hp <= 0) {
       e.alive = false
       killCount++
+      if (!e.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
       monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
       playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1568,6 +1636,7 @@ function tickWound(dt) {
         if (e.hp <= 0) {
           e.alive = false
           killCount++
+          if (!e.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
           monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
           playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1599,6 +1668,7 @@ function applyCleaveDamage(mainTarget, mainDamage) {
     if (e.hp <= 0) {
       e.alive = false
       killCount++
+      if (!e.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
       monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
       playerGold += e.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -1618,6 +1688,17 @@ function giveExp(amount) {
   levelUpDelayRemaining = 0.5
 }
 
+// 下次学习技能消耗的灵感：二次曲线过 (1,5)、(2,8)、(15,100)，第 15 次达 100 后封顶
+function getLearnSkillCost() {
+  const n = skillLearnCount + 1
+  const cost = (470 + 387 * n + 53 * n * n) / 182
+  return Math.min(LEARN_SKILL_COST_CAP, Math.ceil(cost))
+}
+
+function giveInspiration(amount) {
+  playerInspiration += amount
+}
+
 function doLevelUp() {
   playerExp -= playerExpToNext
   const cls = getHeroClass()
@@ -1630,14 +1711,28 @@ function doLevelUp() {
   playerHp = Math.min(playerHp, playerMaxHp)
   playerLevel++
   playerExpToNext = BASE_EXP_TO_NEXT + playerLevel * 5
+  playSound('levelup')
+}
+
+function openLearnSkillChoice() {
+  if (gameState !== 'playing' || gameOver || gameEnded) return
+  const cost = getLearnSkillCost()
+  if (playerInspiration < cost) return
+  choosingSkillByInspiration = true
   gameState = 'choosing_skill'
   fillSkillChoices()
-  playSound('levelup')
 }
 
 function chooseSkill(index) {
   if (gameState !== 'choosing_skill') return
   if (index < 0 || index >= skill_choice_count) return
+  if (choosingSkillByInspiration) {
+    const cost = getLearnSkillCost()
+    if (playerInspiration < cost) return
+    playerInspiration -= cost
+    skillLearnCount++
+    choosingSkillByInspiration = false
+  }
   const id = skill_choices[index]
   if (getEffectiveSlotsUsed() >= MAX_SKILL_SLOTS) {
     pendingReplaceSkillId = id
@@ -1672,6 +1767,13 @@ function replaceSkillAtSlot(slotIndex) {
   if (gameState !== 'choosing_replace_target' || pendingReplaceSkillId == null) return
   const toRemove = getSkillIdAtSlot(slotIndex)
   if (toRemove == null) return
+  if (choosingSkillByInspiration) {
+    const cost = getLearnSkillCost()
+    if (playerInspiration < cost) return
+    playerInspiration -= cost
+    skillLearnCount++
+    choosingSkillByInspiration = false
+  }
   learned_skill_ids = learned_skill_ids.filter(sid => sid !== toRemove)
   const id = pendingReplaceSkillId
   learned_skill_ids.push(id)
@@ -1705,6 +1807,7 @@ function cancelEquipReplace() {
 
 function skipSkillChoice() {
   if (gameState !== 'choosing_skill') return
+  choosingSkillByInspiration = false
   skillRefreshChances += 1
   gameState = 'playing'
 }
@@ -1753,6 +1856,8 @@ function resetGame() {
   skillEnrageTimeLearnedAt = {}
   totalBleedDamage = 0
   playerGold = 0
+  playerInspiration = 0
+  skillLearnCount = 0
   damageByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
   hitCountByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0 }
   enemies = []
@@ -1802,22 +1907,27 @@ function resetGame() {
 function buyShopItem(i) {
   if (bottomDrawerTab !== 'shop' || i < 0 || i >= SHOP_ITEMS.length) return false
   const item = SHOP_ITEMS[i]
-  const cost = item.isForge ? getForgeWeaponCost() : item.cost
+  const cost = item.cost
   if (playerGold < cost) return false
   playerGold -= cost
   playSound('buy')
-  if (i === 0) {
-    const heal = (item.healPct != null ? item.healPct : 0.15) * playerMaxHp
+  if (item.healPct != null) {
+    const heal = item.healPct * playerMaxHp
     playerHp = Math.min(playerHp + heal, playerMaxHp)
-  } else if (i === 1 && item.isForge) {
-    const oldBaseMax = getBaseMaxHpFromSta()
-    const extraMaxHp = playerMaxHp - oldBaseMax
-    weaponForgeCount += 1
-    weaponForgedMul *= FORGE_WEAPON_STAT_MUL
-    // 耐力来自装备的部分增加了，按耐力重算最大生命并保留其它来源的额外上限
-    playerMaxHp = getBaseMaxHpFromSta() + Math.max(0, extraMaxHp)
-    playerHp = Math.min(playerHp, playerMaxHp)
   }
+  return true
+}
+
+function buyForgeWeapon() {
+  const cost = getForgeWeaponCost()
+  if (playerGold < cost) return false
+  playerGold -= cost
+  playSound('buy')
+  const extraMaxHp = playerMaxHp - getBaseMaxHpFromSta()
+  weaponForgeCount += 1
+  weaponForgedMul *= FORGE_WEAPON_STAT_MUL
+  playerMaxHp = getBaseMaxHpFromSta() + Math.max(0, extraMaxHp)
+  playerHp = Math.min(playerHp, playerMaxHp)
   return true
 }
 
@@ -1847,12 +1957,15 @@ function spawnEnemy() {
     attack: ENEMY_ATTACK,
     attackCooldown: 0,
     alive: true,
-    isBoss: isBoss
+    isBoss: isBoss,
+    appearance: 'slime',
+    wobblePhase: Math.random() * Math.PI * 2
   }
   if (slot >= 0) enemies[slot] = e
   else enemies.push(e)
   spawnsThisWave++
-  if (spawnsThisWave >= SPAWNS_PER_WAVE) waveBreakCountdown = WAVE_BREAK_DURATION
+  // 第 20 波刷完后不进入波次间隔倒计时，通关改为「20 波怪全清 + Boss 死后」判定
+  if (spawnsThisWave >= SPAWNS_PER_WAVE && wave < MAX_WAVE) waveBreakCountdown = WAVE_BREAK_DURATION
 }
 
 function getFirstBossHp() {
@@ -1868,29 +1981,64 @@ function getChallengeBoss() {
 }
 
 const CHALLENGE_CENTER_X = (PLAYER_X + WORLD_WIDTH) / 2  // 挑战 Boss 生成在屏幕水平中央（世界坐标）
+const CHALLENGE_BOSS_Y_GAP = 22  // 多只挑战 Boss 时垂直间距（像素）
+
+// 大波次：1-4 第1波(只数1,2,3,4)，5 大Boss(1只)，6-9 第2波(1,2,3,4)，10 大Boss，11-14 第3波… 只数 (层-1)%5 → 0,1,2,3,4 对应 1,2,3,4,1
+function getChallengeBossCount() {
+  const layer = challengeCount + 1
+  const pos = (layer - 1) % 5
+  return pos === 4 ? 1 : pos + 1
+}
+
+// 挑战阶段：1-5 层阶段 0，6-10 层阶段 1，11-15 层阶段 2… 用于攻击力与奖励档位
+function getChallengeStage() {
+  const layer = challengeCount + 1
+  return Math.floor((layer - 1) / 5)
+}
+
+// 是否大 Boss 层（5、10、15…），大 Boss 血量 = 上一阶段小怪 ×2.5
+function isChallengeBigBossLayer() {
+  const layer = challengeCount + 1
+  return layer % 5 === 0
+}
 
 function spawnChallengeBoss() {
   const firstBossHp = getFirstBossHp()
-  const challengeHp = firstBossHp * CHALLENGE_FIRST_BOSS_HP_PCT * Math.pow(2, challengeCount)
-  const challengeAttack = ENEMY_ATTACK * Math.pow(2, challengeCount)  // 每次挑战攻击力也提高 100%
-  const e = {
-    x: CHALLENGE_CENTER_X,
-    y: playerY,
-    hp: challengeHp,
-    maxHp: challengeHp,
-    speed: ENEMY_SPEED * BOSS_SPEED_MUL,
-    attack: challengeAttack,
-    attackCooldown: 0,
-    alive: true,
-    isBoss: true,
-    isChallengeBoss: true
-  }
-  let slot = -1
+  const B = firstBossHp * CHALLENGE_FIRST_BOSS_HP_PCT
+  const layer = challengeCount + 1
+  const stage = getChallengeStage()
+  const numBosses = getChallengeBossCount()
+  const isBigBoss = isChallengeBigBossLayer()
+  const hpPerBoss = isBigBoss
+    ? B * Math.pow(2, Math.floor(layer / 5) - 1) * 2.5
+    : B * Math.pow(2, Math.floor(layer / 5))
+  const attackPerBoss = ENEMY_ATTACK * Math.pow(2, stage)
+  const slotsNeeded = []
   for (let i = 0; i < enemies.length; i++) {
-    if (!enemies[i].alive) { slot = i; break }
+    if (!enemies[i].alive) slotsNeeded.push(i)
+    if (slotsNeeded.length >= numBosses) break
   }
-  if (slot >= 0) enemies[slot] = e
-  else enemies.push(e)
+  while (slotsNeeded.length < numBosses) slotsNeeded.push(-1)
+  for (let i = 0; i < numBosses; i++) {
+    const yOffset = numBosses === 1 ? 0 : (i - (numBosses - 1) / 2) * CHALLENGE_BOSS_Y_GAP
+    const e = {
+      x: CHALLENGE_CENTER_X,
+      y: playerY + yOffset,
+      hp: hpPerBoss,
+      maxHp: hpPerBoss,
+      speed: ENEMY_SPEED * BOSS_SPEED_MUL,
+      attack: attackPerBoss,
+      attackCooldown: 0,
+      alive: true,
+      isBoss: true,
+      isChallengeBoss: true,
+      appearance: 'slime',
+      wobblePhase: Math.random() * Math.PI * 2
+    }
+    const slot = slotsNeeded[i]
+    if (slot >= 0) enemies[slot] = e
+    else enemies.push(e)
+  }
   challengeTimer = CHALLENGE_DURATION
   effects.push({ type: 'shout', text: '挑战开始！', x: PLAYER_X, y: playerY, life: 1.2, maxLife: 1.2, stackIndex: getShoutStackIndex() })
 }
@@ -1990,9 +2138,19 @@ wx.onTouchEnd(function (e) {
       if (bottomDrawerTab !== 'damage') damageStatsScrollY = 0
       return
     }
-    if (bottomDrawerTab != null && drawerSlideProgress >= 0.98 && drawerChallengeStartRect && hitTest(x, y, drawerChallengeStartRect) && challengeTimer <= 0) {
-      spawnChallengeBoss()
-      return
+    if (bottomDrawerTab === 'game' && drawerSlideProgress >= 0.98) {
+      if (drawerGameChallengeRect && hitTest(x, y, drawerGameChallengeRect) && challengeTimer <= 0) {
+        spawnChallengeBoss()
+        return
+      }
+      if (drawerGameLearnSkillRect && hitTest(x, y, drawerGameLearnSkillRect) && playerInspiration >= getLearnSkillCost()) {
+        openLearnSkillChoice()
+        return
+      }
+      if (drawerGameForgeBuyRect && hitTest(x, y, drawerGameForgeBuyRect) && playerGold >= getForgeWeaponCost()) {
+        buyForgeWeapon()
+        return
+      }
     }
     if (bottomDrawerTab === 'shop' && drawerSlideProgress >= 0.98 && shopBuyRects.length > 0) {
       for (let i = 0; i < shopBuyRects.length; i++) {
@@ -2113,7 +2271,15 @@ function loop(timestamp) {
     requestAnimationFrame(loop)
     return
   }
-  // 波次间隔：本波怪物全部出完后开始计时，倒计时结束进入下一波
+  // 通关判定：第 20 波已刷完且场上无存活敌人（含本关 Boss 死亡）即通关
+  if (!gameEnded && wave === MAX_WAVE && spawnsThisWave >= SPAWNS_PER_WAVE) {
+    const anyAlive = enemies.some(e => e.alive)
+    if (!anyAlive) {
+      gameEnded = true
+      saveGame()
+    }
+  }
+  // 波次间隔：本波怪物全部出完后开始计时，倒计时结束进入下一波（第 20 波不再进入倒计时）
   if (!gameEnded) {
     if (waveBreakCountdown > 0) {
       waveBreakCountdown -= dt
@@ -2145,8 +2311,10 @@ function loop(timestamp) {
   if (challengeTimer > 0) {
     const cb = getChallengeBoss()
     if (!cb) {
-      const reward = Math.floor(CHALLENGE_GOLD_BASE * Math.pow(CHALLENGE_GOLD_MUL, challengeCount))
+      const rewardStage = Math.floor((challengeCount + 1) / 5)
+      const reward = Math.floor(CHALLENGE_GOLD_BASE * Math.pow(CHALLENGE_GOLD_MUL, rewardStage))
       playerGold += reward
+      giveInspiration(reward)
       challengeCount++
       challengeTimer = 0
       effects.push({ type: 'shout', text: '挑战成功！', x: PLAYER_X, y: playerY, life: 1.5, maxLife: 1.5, stackIndex: getShoutStackIndex() })
@@ -2162,6 +2330,8 @@ function loop(timestamp) {
 
   // 仅战斗内累计时间（选技能/商店/波次间隔不计）
   if (waveBreakCountdown <= 0) combatTimeSeconds += dt
+  // 灵感：每秒 +1（与战斗时间同节奏，进行中即增加）
+  if (gameState === 'playing' && !gameOver && !gameEnded) playerInspiration += dt * INSPIRATION_PER_SECOND
   // 激怒状态计时
   if (enrageBuffRemaining > 0) {
     enrageBuffRemaining = Math.max(0, enrageBuffRemaining - dt)
@@ -2209,6 +2379,7 @@ function loop(timestamp) {
           if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
           target.alive = false
           killCount++
+          if (!target.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
           monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
           playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -2219,6 +2390,7 @@ function loop(timestamp) {
           effects.push({ x: target.x, y: target.y, type: 'hit', life: 0.12 })
           if (critResult.isCrit) effects.push({ x: target.x, y: target.y, type: 'crit', life: 0.6 })
           playSound('hit')
+          setEnemySquash(target)
         }
         if (ti === 0 && target.alive && isLearned(SKILL_ZHANSHA_ID) && Math.random() < getZhanShaProcChance() && skillZhanShaCd <= 0) {
           const zsBase = computeAttack() * getZhanShaDamageMul()
@@ -2240,6 +2412,7 @@ function loop(timestamp) {
           if (target.hp <= 0) {
             target.alive = false
             killCount++
+            if (!target.isChallengeBoss) giveInspiration(INSPIRATION_PER_KILL)
             monsterKillCount++
     if (isLearned(SKILL_XUANFENG_ID)) skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] = (skillMonsterKillSinceLearned[SKILL_XUANFENG_ID] || 0) + 1
             playerGold += target.isBoss ? GOLD_BOSS : GOLD_PER_KILL
@@ -2248,6 +2421,7 @@ function loop(timestamp) {
             playSound('kill')
           } else {
             playSound('hit')
+            setEnemySquash(target)
           }
         }
       }
@@ -2440,7 +2614,7 @@ function drawSkillChoiceOverlay(w, h) {
   ctx.fillStyle = UI.primary
   ctx.font = 'bold 18px sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText('升级！选择一项技能', w / 2, y + 20)
+  ctx.fillText(choosingSkillByInspiration ? ('学习技能（消耗 ' + getLearnSkillCost() + ' 灵感）') : '升级！选择一项技能', w / 2, y + 20)
   y += titleH
   ctx.fillStyle = UI.textDim
   ctx.font = '12px sans-serif'
@@ -2505,6 +2679,11 @@ function drawSkillChoiceOverlay(w, h) {
           ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, sy + 26)
           ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, sy + 36)
           ctx.textBaseline = 'middle'
+        } else if (progressList.length === 1 && progressList[0].name === '60秒战斗') {
+          const p = progressList[0]
+          const remaining = Math.max(0, p.total - Math.floor(p.current))
+          const text = remaining > 0 ? (remaining === 60 ? '60秒后吞噬' : (remaining + '秒后可吞噬')) : '可吞噬'
+          ctx.fillText(text, sx + slotW / 2, sy + slotH - 12)
         } else {
           const progressStr = progressList.map(p => p.name + formatProgressDisplay(p.current, p.total)).join(' ')
           ctx.fillText(progressStr, sx + slotW / 2, sy + slotH - 12)
@@ -2706,6 +2885,11 @@ function drawReplaceTargetOverlay(w, h) {
           ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, sy + 26)
           ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, sy + 36)
           ctx.textBaseline = 'middle'
+        } else if (progressList.length === 1 && progressList[0].name === '60秒战斗') {
+          const p = progressList[0]
+          const remaining = Math.max(0, p.total - Math.floor(p.current))
+          const text = remaining > 0 ? (remaining === 60 ? '60秒后吞噬' : (remaining + '秒后可吞噬')) : '可吞噬'
+          ctx.fillText(text, sx + slotW / 2, sy + slotH - 12)
         } else {
           const progressStr = progressList.map(p => p.name + formatProgressDisplay(p.current, p.total)).join(' ')
           ctx.fillText(progressStr, sx + slotW / 2, sy + slotH - 12)
@@ -2855,6 +3039,7 @@ function drawGame(w, h) {
   const BAR_STACK_GAP = 10
   const OVERLAP_X = 40
   const OVERLAP_Y = 28
+  const nowSec = (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()) / 1000
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i]
     if (!e.alive) continue
@@ -2869,13 +3054,17 @@ function drawGame(w, h) {
       }
     }
     const barOffset = stackIdx * BAR_STACK_GAP
-    ctx.fillStyle = e.isBoss ? '#8b5cf6' : UI.danger
-    ctx.beginPath()
-    ctx.arc(ex, e.y, radius, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.strokeStyle = UI.border
-    ctx.lineWidth = 1.5
-    ctx.stroke()
+    if (!e.appearance || e.appearance === 'slime') {
+      drawSlimeBody(ex, e.y, radius, e.isBoss, nowSec, e)
+    } else {
+      ctx.fillStyle = e.isBoss ? '#8b5cf6' : UI.danger
+      ctx.beginPath()
+      ctx.arc(ex, e.y, radius, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = UI.border
+      ctx.lineWidth = 1.5
+      ctx.stroke()
+    }
     if (e.isBoss) {
       ctx.fillStyle = UI.text
       ctx.font = 'bold 10px sans-serif'
@@ -3032,9 +3221,13 @@ function drawPanel(w, h) {
   ctx.fillText('金币 ' + playerGold, shopX + btnW, resBlockTop + 24)
   ctx.fillStyle = UI.text
   ctx.fillText('击杀 ' + killCount, shopX + btnW, resBlockTop + 38)
+  ctx.fillStyle = UI.textDim
+  ctx.fillText('灵感 ' + Math.floor(playerInspiration), shopX + btnW, resBlockTop + 52)
 
+  learnSkillButtonRect = null
+  const firstRightBtnY = resBlockTop + 58
   if (isLearned(SKILL_LUMANG_ID)) {
-    const lumangBtnY = resBlockTop + 44
+    const lumangBtnY = firstRightBtnY
     const canCast = skillLumangCd <= 0 && recklessBuffRemaining <= 0
     roundRect(shopX, lumangBtnY, btnW, 28, UI.radiusSm)
     ctx.fillStyle = canCast ? '#b45309' : UI.bgCard
@@ -3053,7 +3246,7 @@ function drawPanel(w, h) {
     lumangButtonRect = null
   }
   if (isLearned(40)) {
-    const odinBtnY = (lumangButtonRect ? lumangButtonRect.y + lumangButtonRect.h + 4 : resBlockTop + 44)
+    const odinBtnY = (lumangButtonRect ? lumangButtonRect.y + lumangButtonRect.h + 4 : firstRightBtnY)
     const canOdin = skillOdinCd <= 0 && getEnemiesInRange(1).length > 0
     roundRect(shopX, odinBtnY, btnW, 28, UI.radiusSm)
     ctx.fillStyle = canOdin ? '#6b21a8' : UI.bgCard
@@ -3224,6 +3417,11 @@ function drawPanel(w, h) {
           ctx.fillText(RAGE_CONSUMED_FOR_BAONU_DEVOUR + '怒气后吞噬', sx + slotW / 2, sy + 26)
           ctx.fillText(formatProgressDisplay(progressList[0].current, progressList[0].total), sx + slotW / 2, sy + 36)
           ctx.textBaseline = 'middle'
+        } else if (progressList.length === 1 && progressList[0].name === '60秒战斗') {
+          const p = progressList[0]
+          const remaining = Math.max(0, p.total - Math.floor(p.current))
+          const text = remaining > 0 ? (remaining === 60 ? '60秒后吞噬' : (remaining + '秒后可吞噬')) : '可吞噬'
+          ctx.fillText(text, sx + slotW / 2, sy + slotH - 12)
         } else {
           const progressStr = progressList.map(p => p.name + formatProgressDisplay(p.current, p.total)).join(' ')
           ctx.fillText(progressStr, sx + slotW / 2, sy + slotH - 12)
@@ -3331,6 +3529,9 @@ function drawBottomDrawer(w, h) {
   if (bottomDrawerTab == null) return
   drawerCloseRect = null
   drawerChallengeStartRect = null
+  drawerGameChallengeRect = null
+  drawerGameLearnSkillRect = null
+  drawerGameForgeBuyRect = null
   const gameTop = TOP_SAFE_MARGIN
   const restH = h - TOP_SAFE_MARGIN
   const gameHeight = Math.floor(restH * GAME_HEIGHT_RATIO)
@@ -3359,39 +3560,108 @@ function drawBottomDrawer(w, h) {
   const contentW = w - pad * 2
   const contentX = pad
 
-  if (bottomDrawerTab === 'challenge') {
+  if (bottomDrawerTab === 'game') {
     ctx.fillStyle = UI.primary
     ctx.font = 'bold 16px sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText('挑战', w / 2, drawerTop + 16)
+    ctx.fillText('游戏', w / 2, drawerTop + 16)
     ctx.textAlign = 'left'
-    const layer = challengeCount + 1
+    const cardW = (contentW - 12) / 3
+    const cardH = Math.min(88, contentH - 8)
+    const cardY = contentTop + 4
+    const pad = 4
     const challengeActive = challengeTimer > 0
-    ctx.font = '13px sans-serif'
-    ctx.fillStyle = UI.text
-    ctx.fillText('第 ' + layer + ' 层', contentX, contentTop + 20)
-    ctx.fillText(challengeActive ? '进行中：剩余 ' + Math.ceil(challengeTimer) + ' 秒' : '限时 30 秒击杀 Boss，血量与攻击逐层翻倍。', contentX, contentTop + 44)
-    if (!challengeActive) {
-      const btnW = 120
-      const btnX = (w - btnW) / 2
-      const btnY = contentTop + 80
-      roundRect(btnX, btnY, btnW, 36, UI.radiusSm)
-      ctx.fillStyle = '#0d9488'
+    const layer = challengeCount + 1
+    const nextBossCount = getChallengeBossCount()
+    for (let i = 0; i < 3; i++) {
+      const cx = contentX + i * (cardW + pad)
+      roundRect(cx, cardY, cardW, cardH, UI.radiusSm)
+      ctx.fillStyle = UI.bgCard
       ctx.fill()
-      ctx.strokeStyle = '#5eead4'
+      ctx.strokeStyle = UI.border
+      ctx.lineWidth = 1
       ctx.stroke()
-      ctx.fillStyle = UI.bg
-      ctx.font = 'bold 14px sans-serif'
+      ctx.fillStyle = UI.text
+      ctx.font = 'bold 12px sans-serif'
       ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('开始挑战', btnX + btnW / 2, btnY + 18)
-      drawerChallengeStartRect = { x: btnX, y: btnY, w: btnW, h: 36 }
-    } else {
-      drawerChallengeStartRect = null
+      if (i === 0) {
+        ctx.fillText('挑战', cx + cardW / 2, cardY + 10)
+        ctx.font = '11px sans-serif'
+        ctx.fillStyle = UI.text
+        ctx.fillText('当前第 ' + layer + ' 层', cx + cardW / 2, cardY + 24)
+        ctx.font = '10px sans-serif'
+        ctx.fillStyle = UI.textDim
+        ctx.fillText(challengeActive ? '剩余 ' + Math.ceil(challengeTimer) + ' 秒' : '限时击杀Boss，得金币与灵感', cx + cardW / 2, cardY + 38)
+        if (!challengeActive) {
+          const btnW = 56
+          const btnH = 22
+          const btnX = cx + (cardW - btnW) / 2
+          const btnY = cardY + cardH - btnH - 6
+          roundRect(btnX, btnY, btnW, btnH, UI.radiusSm)
+          ctx.fillStyle = '#0d9488'
+          ctx.fill()
+          ctx.strokeStyle = 'rgba(13,148,136,0.6)'
+          ctx.stroke()
+          ctx.fillStyle = UI.bg
+          ctx.font = '11px sans-serif'
+          ctx.textBaseline = 'middle'
+          ctx.fillText('开始挑战', btnX + btnW / 2, btnY + btnH / 2)
+          ctx.textBaseline = 'alphabetic'
+          drawerGameChallengeRect = { x: btnX, y: btnY, w: btnW, h: btnH }
+        } else drawerGameChallengeRect = null
+      } else if (i === 1) {
+        ctx.fillText('学习技能', cx + cardW / 2, cardY + 12)
+        ctx.font = '10px sans-serif'
+        ctx.fillStyle = UI.textDim
+        ctx.fillText('消耗灵感学习新技能', cx + cardW / 2, cardY + 28)
+        const learnCost = getLearnSkillCost()
+        const canLearn = playerInspiration >= learnCost
+        const btnW = 52
+        const btnH = 22
+        const btnX = cx + (cardW - btnW) / 2
+        const btnY = cardY + cardH - btnH - 6
+        roundRect(btnX, btnY, btnW, btnH, UI.radiusSm)
+        ctx.fillStyle = canLearn ? '#0d9488' : UI.bgCardAlt
+        ctx.fill()
+        ctx.strokeStyle = canLearn ? 'rgba(13,148,136,0.6)' : UI.textMuted
+        ctx.stroke()
+        ctx.fillStyle = canLearn ? UI.bg : UI.textMuted
+        ctx.font = '11px sans-serif'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(learnCost + ' 灵感', btnX + btnW / 2, btnY + btnH / 2)
+        ctx.textBaseline = 'alphabetic'
+        drawerGameLearnSkillRect = { x: btnX, y: btnY, w: btnW, h: btnH }
+      } else {
+        ctx.fillText('打磨武器', cx + cardW / 2, cardY + 14)
+        ctx.font = '10px sans-serif'
+        ctx.fillStyle = UI.textDim
+        const forgeCost = getForgeWeaponCost()
+        const forgePct = ((weaponForgedMul - 1) * 100).toFixed(0)
+        ctx.fillText('属性+20% 当前+' + forgePct + '%', cx + cardW / 2, cardY + 30)
+        const btnW = 44
+        const btnH = 22
+        const buyX = cx + (cardW - btnW) / 2
+        const buyY = cardY + cardH - btnH - 6
+        const canForge = playerGold >= forgeCost
+        roundRect(buyX, buyY, btnW, btnH, UI.radiusSm)
+        ctx.fillStyle = canForge ? '#0d9488' : UI.bgCardAlt
+        ctx.fill()
+        ctx.strokeStyle = canForge ? 'rgba(13,148,136,0.6)' : UI.textMuted
+        ctx.stroke()
+        ctx.fillStyle = canForge ? UI.bg : UI.textMuted
+        ctx.font = '11px sans-serif'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(forgeCost + '金', buyX + btnW / 2, buyY + btnH / 2)
+        ctx.textBaseline = 'alphabetic'
+        drawerGameForgeBuyRect = { x: buyX, y: buyY, w: btnW, h: btnH }
+      }
     }
+    ctx.textAlign = 'left'
     return
   }
-  drawerChallengeStartRect = null
+  drawerGameChallengeRect = null
+  drawerGameLearnSkillRect = null
+  drawerGameForgeBuyRect = null
 
   if (bottomDrawerTab === 'attribute') {
     ctx.fillStyle = UI.primary
