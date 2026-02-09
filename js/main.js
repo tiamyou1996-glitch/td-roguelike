@@ -201,6 +201,7 @@ const CHALLENGE_DURATION = 30       // 挑战 Boss 存在时间（秒），超�
 const CHALLENGE_FIRST_BOSS_HP_PCT = 0.5  // 第一次挑战 Boss 血量 = 第一个游戏 Boss(第5波) 的 50%
 const CHALLENGE_GOLD_BASE = 20     // 第一次挑战成功奖励金币
 const CHALLENGE_GOLD_MUL = 1.5     // 后续每次奖励 +50%
+const CHALLENGE_REWARD_CAP = 341  // 挑战奖励（金币+灵感）上限，达到后不再增长
 const INSPIRATION_PER_SECOND = 1   // 灵感：每秒获得
 const INSPIRATION_PER_KILL = 1     // 灵感：每击杀一只怪获得
 const LEARN_SKILL_COST_BASE = 5    // 第一次学习技能消耗灵感
@@ -212,6 +213,7 @@ const SKILL_SLOTS_PER_ROW = 3
 // 技能栏统一尺寸（主界面、选技能界面、替换技能界面一致）
 const SKILL_BAR_SLOT_H = 58
 const SKILL_BAR_SLOT_GAP = 4
+const DEVOUR_FLOAT_DURATION = 1.0   // 吞噬飞卡动画时长（秒）
 // 主动技能数值（嗜血/旋风斩/暴怒）仍用于战斗计算
 const SKILL_XUE_DAMAGE_MUL = 1.5
 const SKILL_XUE_HEAL_PCT = 0.2
@@ -274,15 +276,52 @@ const LATE_GAME_SKILL_IDS = [24, 33, 40]
 const LATE_GAME_CHANCE_MIN = 0.2                    // 第 1 波时进入候选的概率 20%
 const LATE_GAME_PROGRESS_WAVES = 10                 // 多少波后达到 100%
 
+// 经典狂暴战 · 钥匙卡（id 100+ 为虚拟卡，仅用于打开技能链，无战斗效果）
+const KEY_CARD_ID_MIN = 100
+const KEY_CARD_ID_MAX = 106
+const KEY_BAONU = 100      // 强化暴怒
+const KEY_XUE = 103        // 强化嗜血
+const KEY_NUJI = 105       // 怒击进阶
+const KEY_BAONU2 = 101     // 精通暴怒
+const KEY_BAONU3 = 102     // 强化激怒
+const KEY_XUE2 = 104       // 血流成河
+const KEY_NUJI2 = 106      // 精通怒击
+const TOP_LEVEL_KEY_IDS = [KEY_BAONU, KEY_XUE, KEY_NUJI]
+// 经典狂暴战三条线：每层 { keyCardId, keyName, skillIds, synergyName }，synergyName 为 null 时该层无集齐吞噬（如血流成河层 26/27 各自条件）
+const CLASSIC_FURY_LINES = {
+  baonu: {
+    name: '暴怒',
+    tiers: [
+      { keyCardId: 100, keyName: '强化暴怒', skillIds: [36, 37], synergyName: '暴怒' },
+      { keyCardId: 101, keyName: '精通暴怒', skillIds: [38, 39], synergyName: '暴怒2' },
+      { keyCardId: 102, keyName: '强化激怒', skillIds: [28, 29, 30, 31, 32], synergyName: '激怒' }
+    ]
+  },
+  xue: {
+    name: '嗜血',
+    tiers: [
+      { keyCardId: 103, keyName: '强化嗜血', skillIds: [13, 14, 15, 16], synergyName: '嗜血' },
+      { keyCardId: 104, keyName: '血流成河', skillIds: [26, 27], synergyName: null }
+    ]
+  },
+  nuji: {
+    name: '怒击',
+    tiers: [
+      { keyCardId: 105, keyName: '怒击进阶', skillIds: [17, 18, 19], synergyName: '怒击' },
+      { keyCardId: 106, keyName: '精通怒击', skillIds: [20, 21, 22, 23], synergyName: '怒击2' }
+    ]
+  }
+}
+
 // 全技能表（id 即下标）：name, category, type, desc, synergyName, devourCondition, attackMul, speedMul, isActive
 const ALL_SKILLS = [
   { id: 0, name: '狂暴姿态', category: '初始', type: '被动', desc: '使你的自动攻击伤害提高15%，受到伤害提高10%', synergyName: '双持狂战士', devourCondition: '集齐狂暴姿态、激怒状态（精通）、泰坦之握', attackMul: 1.15, speedMul: 1.0 },
   { id: 1, name: '激怒状态', category: '初始', type: '被动', desc: '你在激怒状态下造成的伤害提高15%，精通提高15%，吸血提高3%，持续4秒', synergyName: '双持狂战士', devourCondition: '集齐狂暴姿态、激怒状态（精通）、泰坦之握', attackMul: 1.0, speedMul: 1.0 },
   { id: 2, name: '双武器', category: '初始', type: '被动', desc: '伤害提高10%，普攻同时攻击2个目标，攻击速度降低20%', synergyName: '双持狂战士', devourCondition: '集齐狂暴姿态、激怒状态（精通）、泰坦之握', attackMul: 1.1, speedMul: 0.8 },
-  { id: 3, name: '嗜血', category: '基础', type: '主动', desc: '主动：对当前目标造成150%攻击力伤害，并回复造成伤害的20%生命；随后3秒内攻速提升至1.2倍。战士释放时额外获得8怒气。冷却4秒，有目标时自动释放。有30%几率进入激怒状态', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒', attackMul: 1.0, speedMul: 1.0, isActive: true },
-  { id: 4, name: '怒击', category: '基础', type: '主动', desc: '一次强力的打击，一共造成130%攻击力伤害，产生12点怒气，7s冷却时间', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒', attackMul: 1.0, speedMul: 1.0, isActive: true },
-  { id: 5, name: '暴怒', category: '基础', type: '主动', desc: '主动：消耗100怒气，造成（力量×10+攻击力）×280%伤害（可暴击），无冷却。怒气≥100且有目标时自动释放。可触发顺劈。累计消耗怒气达500后可吞噬（不占栏位）。进入激怒状态', synergyName: '愤怒化身', devourCondition: '累计消耗怒气达500后吞噬（不占栏位）', attackMul: 1.0, speedMul: 1.0, isActive: true },
-  { id: 6, name: '旋风斩', category: '基础', type: '主动', desc: '主动：对攻击范围内最多5个敌人各造成80%攻击力伤害（可暴击）。冷却5秒。使用后5秒内进入顺劈：嗜血或暴怒对主目标造成伤害时，主目标外最多4个敌人额外受到60%顺劈伤害。击杀怪数达50后可吞噬（不占栏位）。', synergyName: '旋风斩', devourCondition: '60秒后自动吞噬', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 3, name: '嗜血', category: '基础', type: '主动', desc: '主动：对当前目标造成150%攻击力伤害，并回复造成伤害的20%生命；随后3秒内攻速提升至1.2倍。战士释放时额外获得8怒气。冷却4秒，有目标时自动释放。有30%几率进入激怒状态', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒、旋风斩', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 4, name: '怒击', category: '基础', type: '主动', desc: '一次强力的打击，一共造成130%攻击力伤害，产生12点怒气，7s冷却时间', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒、旋风斩', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 5, name: '暴怒', category: '基础', type: '主动', desc: '主动：消耗100怒气，造成（力量×10+攻击力）×280%伤害（可暴击），无冷却。怒气≥100且有目标时自动释放。可触发顺劈。集齐嗜血、怒击、暴怒、旋风斩后吞噬；或累计消耗怒气达500后吞噬（不占栏位）。进入激怒状态', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒、旋风斩（或累计消耗怒气达500后吞噬）', attackMul: 1.0, speedMul: 1.0, isActive: true },
+  { id: 6, name: '旋风斩', category: '基础', type: '主动', desc: '主动：对攻击范围内最多5个敌人各造成80%攻击力伤害（可暴击）。冷却5秒。使用后5秒内进入顺劈：嗜血或暴怒对主目标造成伤害时，主目标外最多4个敌人额外受到60%顺劈伤害。集齐嗜血、怒击、暴怒、旋风斩后吞噬（不占栏位）。', synergyName: '愤怒化身', devourCondition: '集齐嗜血、怒击、暴怒、旋风斩', attackMul: 1.0, speedMul: 1.0, isActive: true },
   { id: 7, name: '斩杀', category: '基础', type: '被动', desc: '攻击时有20%的概率触发，造成200%攻击力伤害，5s冷却时间', synergyName: '斩杀', devourCondition: '60秒后自动吞噬', attackMul: 1.0, speedMul: 1.0 },
   { id: 8, name: '猝死', category: '进阶', type: '被动', desc: '斩杀的触发概率增加10%，伤害提高50%', synergyName: '斩杀', devourCondition: '集齐猝死、强化斩杀、毁灭', attackMul: 1.0, speedMul: 1.0, prerequisite: 7 },
   { id: 9, name: '强化斩杀', category: '进阶', type: '被动', desc: '斩杀会产生20点怒气值', synergyName: '斩杀', devourCondition: '集齐猝死、强化斩杀、毁灭', attackMul: 1.0, speedMul: 1.0, prerequisite: 7 },
@@ -319,10 +358,29 @@ const ALL_SKILLS = [
   { id: 40, name: '奥丁之怒', category: '进阶', type: '主动', desc: '对攻击范围内的所有单位，造成200%的伤害，并且造成200%的流血伤害，产生20点怒气，进入激怒状态。冷却时间30秒', synergyName: '奥丁之怒', devourCondition: '60s后吞噬', attackMul: 1.0, speedMul: 1.0, isActive: true }
 ]
 
+// 每个吞噬单独一色（吞噬名 → 顶条/边框色），识别更细；钥匙卡用金色
+const SYNERGY_LINE_COLORS = {
+  '双持狂战士': '#6B7280',
+  '愤怒化身': '#B91C1C',
+  '斩杀': '#16A34A',
+  '旋风斩': '#0891B2',
+  '嗜血': '#DC2626',
+  '怒击': '#EA580C',
+  '怒击2': '#C2410C',
+  '流血': '#991B1B',
+  '激怒': '#6D28D9',
+  '回复': '#65A30D',
+  '暴怒': '#7C3AED',
+  '暴怒2': '#5B21B6',
+  '鲁莽': '#E11D48',
+  '奥丁之怒': '#2563EB'
+}
+const KEY_CARD_COLOR = '#D97706'
+
 // 吞噬定义：集齐 req 内技能即激活，组成技能不占栏位
 const SYNERGY_DEFS = [
   { name: '双持狂战士', req: [0, 1, 2] },
-  { name: '愤怒化身', req: [3, 4, 5] },
+  { name: '愤怒化身', req: [3, 4, 5, 6] },
   { name: '斩杀', req: [8, 9, 10] },
   { name: '旋风斩', req: [11, 12] },
   { name: '嗜血', req: [13, 14, 15, 16] },
@@ -362,6 +420,102 @@ function getAllSkills() {
 
 function getSkillById(skillId) {
   return (skillId >= 0 && skillId < ALL_SKILLS.length) ? ALL_SKILLS[skillId] : null
+}
+
+function isKeyCardId(id) {
+  return typeof id === 'number' && id >= KEY_CARD_ID_MIN && id <= KEY_CARD_ID_MAX
+}
+
+function getKeyCardDisplayName(id) {
+  if (!isKeyCardId(id)) return ''
+  for (const line of Object.values(CLASSIC_FURY_LINES)) {
+    for (const t of line.tiers) {
+      if (t.keyCardId === id) return t.keyName
+    }
+  }
+  return '钥匙卡'
+}
+
+function getKeyCardDesc(id) {
+  if (!isKeyCardId(id)) return ''
+  for (const [lineKey, line] of Object.entries(CLASSIC_FURY_LINES)) {
+    for (const t of line.tiers) {
+      if (t.keyCardId === id) return '选择后打开「' + line.name + '」技能链'
+    }
+  }
+  return '选择后打开技能链'
+}
+
+// 卡牌顶条文案：钥匙卡=「钥匙卡」，愤怒化身四张=嗜血/怒击/暴怒/旋风斩，其余=吞噬名
+function getCardTopBarText(skillId) {
+  if (isKeyCardId(skillId)) return '钥匙卡'
+  if (skillId === 3) return '嗜血'
+  if (skillId === 4) return '怒击'
+  if (skillId === 5) return '暴怒'
+  if (skillId === 6) return '旋风斩'
+  const sk = getSkillById(skillId)
+  return sk ? (sk.synergyName || '') : ''
+}
+
+// 卡牌线条色：钥匙卡=金色，其余按吞噬名一色（愤怒化身四张 3,4,5,6 用「愤怒化身」色）
+function getCardLineColor(skillId) {
+  if (isKeyCardId(skillId)) return KEY_CARD_COLOR
+  if (skillId >= 3 && skillId <= 6) return SYNERGY_LINE_COLORS['愤怒化身']
+  const sk = getSkillById(skillId)
+  const name = sk ? sk.synergyName : null
+  return (name && SYNERGY_LINE_COLORS[name]) ? SYNERGY_LINE_COLORS[name] : UI.primary
+}
+
+function isSynergyActiveByName(synergyName) {
+  const idx = SYNERGY_DEFS.findIndex(s => s.name === synergyName)
+  return idx >= 0 && isSynergyActive(idx)
+}
+
+// 经典狂暴战阶段：愤怒化身已激活时使用钥匙卡+已展开技能池
+function isClassicFuryPoolActive() {
+  return isSynergyActiveByName('愤怒化身')
+}
+
+// 经典狂暴战阶段与钥匙卡一起出现的「线外」进阶池（斩杀、旋风斩、鲁莽、奥丁之怒）
+const CLASSIC_FURY_EXTRA_POOL_NAMES = ['斩杀', '旋风斩', '鲁莽', '鲁莽2', '奥丁之怒']
+
+function buildClassicFuryPool() {
+  const available = []
+  // 1. 顶层未选的钥匙卡
+  for (const kid of TOP_LEVEL_KEY_IDS) {
+    if (pickedKeyCardIds.indexOf(kid) < 0) available.push(kid)
+  }
+  // 2. 各线：已选钥匙卡展开的当前层技能（未学的）+ 本层吞噬后下一张钥匙卡
+  for (const line of Object.values(CLASSIC_FURY_LINES)) {
+    for (let t = 0; t < line.tiers.length; t++) {
+      const tier = line.tiers[t]
+      const keyPicked = pickedKeyCardIds.indexOf(tier.keyCardId) >= 0
+      if (keyPicked) {
+        for (const sid of tier.skillIds) {
+          if (!isLearned(sid)) available.push(sid)
+        }
+      } else {
+        if (t === 0) continue
+        const prevTier = line.tiers[t - 1]
+        if (pickedKeyCardIds.indexOf(prevTier.keyCardId) < 0) continue
+        const prevSynergyOk = prevTier.synergyName ? isSynergyActiveByName(prevTier.synergyName) : (function () {
+          for (const sid of prevTier.skillIds) if (!isLearned(sid)) return false
+          return true
+        })()
+        if (prevSynergyOk) available.push(tier.keyCardId)
+      }
+    }
+  }
+  // 3. 吞噬愤怒化身后，与钥匙卡一起出现的线外技能（斩杀、旋风斩、鲁莽、奥丁之怒），按进阶池前置判断
+  if (!isLearned(7)) available.push(7) // 斩杀基础卡 7，否则斩杀池 [8,9,10] 永远无法解锁
+  for (const pool of ADVANCED_POOLS) {
+    if (CLASSIC_FURY_EXTRA_POOL_NAMES.indexOf(pool.poolName) < 0) continue
+    if (!isAdvancedPoolUnlocked(pool)) continue
+    for (const sid of pool.skillIds) {
+      if (!isLearned(sid)) available.push(sid)
+    }
+  }
+  return available
 }
 
 function getAdvancedPoolName(skillId) {
@@ -460,12 +614,25 @@ const SKILL_ODIN_BLEED_PCT = 2    // 200% 攻击力流血（6秒内每0.2s跳，
 const SKILL_ODIN_RAGE = 20
 let deathReviveUsed = false
 let gameEnded = false
-let gameState = 'playing' // 'title' | 'playing' | 'choosing_skill' | 'choosing_replace_target' | 'choosing_equip_replace' | 'shop'
+let gameState = 'playing' // 'title' | 'intro' | 'playing' | ...
+const INTRO_DURATION = 2.5   // 新游戏开始前开场动画时长（秒），可改为 0 关闭；使用视频时作备用
+const INTRO_VIDEO_URL = 'intro.mp4'   // 填 mp4 路径则用视频做开场，留空则用 canvas 动画
+let introTimer = 0           // 开场动画剩余秒数，>0 时处于 intro 状态（未用视频时）
+let introUseVideo = false    // 本局开场是否使用视频
+// 根据当前页面地址解析视频 URL，避免 GitHub Pages 子路径下 404
+function getIntroVideoSrc() {
+  if (!INTRO_VIDEO_URL) return ''
+  if (typeof window === 'undefined' || !window.location) return INTRO_VIDEO_URL
+  const path = window.location.pathname || '/'
+  const dir = path.replace(/\/[^/]*$/, '/') || '/'
+  return window.location.origin + dir + INTRO_VIDEO_URL.replace(/^\//, '')
+}
 let playerLevel = 1
 let playerExp = 0
 let playerExpToNext = BASE_EXP_TO_NEXT
 let levelUpDelayRemaining = 0 // 升级前延迟 0.5 秒，期间经验条满格闪烁
 let learned_skill_ids = []
+let pickedKeyCardIds = []   // 经典狂暴战阶段已选钥匙卡（选过的钥匙卡不再进池）
 let skill_choices = []
 let skill_choice_count = 0
 let skillChoiceRects = []
@@ -510,6 +677,8 @@ let shopBuyRects = []
 let weaponGrantToastRemaining = 0   // 获得武器提示剩余秒数（倒计时）
 let weaponGrantToastDuration = 1.8  // 总时长，用于计算动画进度
 let weaponGrantToastName = ''      // 获得的武器名
+let synergyDevourAnimationPlayed = {}  // 已播放过飞卡动画的吞噬名 { '嗜血': true }
+let devourFloatingCards = []       // 正在飞向吞噬 Tab 的卡 { synergyName, skillId, skillName, startX, startY, endX, endY, progress, lineColor }
 let damageStatsScrollY = 0
 let damageStatsContentHeight = 0
 let damageStatsBoxBounds = null
@@ -714,6 +883,7 @@ function saveGame() {
       damageByType: { ...damageByType },
       hitCountByType: { ...hitCountByType },
       learned_skill_ids: learned_skill_ids.slice(),
+      pickedKeyCardIds: pickedKeyCardIds.slice(),
       playerAttackMul,
       playerSpeedMul,
       weaponForgeCount,
@@ -749,7 +919,8 @@ function saveGame() {
       kuangLuanHasteStacks,
       kuangLuanBuffRemaining,
       skillOdinCd,
-      deathReviveUsed
+      deathReviveUsed,
+      synergyDevourAnimationPlayed: { ...synergyDevourAnimationPlayed }
     }
     wx.setStorageSync(SAVE_KEY, JSON.stringify(data))
   } catch (err) {
@@ -807,6 +978,7 @@ function loadGame() {
       hitCountByType = { normal: 0, xue: 0, nuji: 0, xuanfeng: 0, cleave: 0, baonu: 0, baonu_aoe: 0, zhansha: 0, odin: 0, bleed: 0, ...data.hitCountByType }
     }
     learned_skill_ids = Array.isArray(data.learned_skill_ids) ? data.learned_skill_ids : []
+    pickedKeyCardIds = Array.isArray(data.pickedKeyCardIds) ? data.pickedKeyCardIds : []
     playerAttackMul = data.playerAttackMul ?? 1
     playerSpeedMul = data.playerSpeedMul ?? 1
     weaponForgeCount = (data.weaponForgeCount ?? 0) | 0
@@ -857,6 +1029,9 @@ function loadGame() {
     kuangLuanBuffRemaining = (data.kuangLuanBuffRemaining ?? 0) | 0
     skillOdinCd = (data.skillOdinCd ?? 0) | 0
     deathReviveUsed = !!data.deathReviveUsed
+    if (data.synergyDevourAnimationPlayed && typeof data.synergyDevourAnimationPlayed === 'object') {
+      synergyDevourAnimationPlayed = { ...data.synergyDevourAnimationPlayed }
+    }
     challengeCount = Math.max(0, (data.challengeCount ?? 0) | 0)
     challengeTimer = Math.max(0, (data.challengeTimer ?? 0) | 0)
     if (pendingDropEquipmentId != null) gameState = 'choosing_equip_replace'
@@ -954,6 +1129,72 @@ function getEffectiveSlotsUsed() {
   for (let i = 0; i < learned_skill_ids.length; i++)
     if (!isSkillConsumedBySynergy(learned_skill_ids[i])) n++
   return n
+}
+
+// 技能栏 6 格在主界面中的位置（与 drawPanel 布局一致），用于吞噬飞卡起点
+function getSkillBarSlotRects(w) {
+  const gap = 16
+  const btnW = 100
+  const slotRowH = SKILL_BAR_SLOT_H
+  const slotRowY = panelTop + 28
+  const slotAreaW = Math.max(0, w - gap * 2 - btnW - gap - 8)
+  const slotGap = SKILL_BAR_SLOT_GAP
+  const slotH = slotRowH
+  const slotW = slotAreaW > 0 ? Math.max(0, Math.floor((slotAreaW - slotGap * (SKILL_SLOTS_PER_ROW - 1)) / SKILL_SLOTS_PER_ROW)) : 0
+  const slotStartX = gap
+  const rects = []
+  for (let i = 0; i < MAX_SKILL_SLOTS; i++) {
+    const row = Math.floor(i / SKILL_SLOTS_PER_ROW)
+    const col = i % SKILL_SLOTS_PER_ROW
+    rects.push({
+      x: slotStartX + col * (slotW + slotGap),
+      y: slotRowY + row * (slotH + slotGap),
+      w: slotW,
+      h: slotH
+    })
+  }
+  return rects
+}
+
+// 吞噬达成时：从技能栏（或新选卡位置）飞向「吞噬效果」Tab 的动画
+function tryStartDevourAnimation(skillsInSlotsBefore, slotRects, w, h, newSkillId, newSkillCardRect) {
+  if (!slotRects || slotRects.length < MAX_SKILL_SLOTS) return
+  const tabBarTop = h - TAB_BAR_HEIGHT
+  const tabW = w / TAB_IDS.length
+  const synergyTabIdx = TAB_IDS.indexOf('synergy')
+  const endX = (synergyTabIdx + 0.5) * tabW
+  const endY = tabBarTop + TAB_BAR_HEIGHT / 2
+  for (let i = 0; i < SYNERGY_DEFS.length; i++) {
+    const s = SYNERGY_DEFS[i]
+    if (synergyDevourAnimationPlayed[s.name]) continue
+    if (!isSynergyActive(i)) continue
+    synergyDevourAnimationPlayed[s.name] = true
+    for (let k = 0; k < s.req.length; k++) {
+      const skillId = s.req[k]
+      const sk = getSkillById(skillId)
+      const skillName = sk ? sk.name : ('id' + skillId)
+      const lineColor = getCardLineColor(skillId)
+      let startX, startY
+      if (newSkillId === skillId && newSkillCardRect) {
+        startX = newSkillCardRect.x + newSkillCardRect.w / 2
+        startY = newSkillCardRect.y + newSkillCardRect.h / 2
+      } else {
+        const slotIndex = skillsInSlotsBefore.findIndex(slot => slot && slot.skillId === skillId)
+        if (slotIndex < 0 || !slotRects[slotIndex]) continue
+        const r = slotRects[slotIndex]
+        startX = r.x + r.w / 2
+        startY = r.y + r.h / 2
+      }
+      devourFloatingCards.push({
+        synergyName: s.name,
+        skillId,
+        skillName,
+        startX, startY, endX, endY,
+        progress: 0,
+        lineColor
+      })
+    }
+  }
 }
 
 // 返回当前占用栏位的技能列表（顺序与 learned 一致，被套装吞噬的不占位故不在此列）
@@ -1128,32 +1369,27 @@ function fillSkillChoices() {
     skill_choice_count = skill_choices.length
     return
   }
-  for (let i = 0; i < BASE_SKILL_IDS.length; i++) {
-    const id = BASE_SKILL_IDS[i]
-    if (!isLearned(id)) available.push(id)
-  }
-  const lateGameChance = getLateGameSkillChance()
-  for (let i = 0; i < ADVANCED_POOLS.length; i++) {
-    const pool = ADVANCED_POOLS[i]
-    if (!isAdvancedPoolUnlocked(pool)) continue
-    for (let j = 0; j < pool.skillIds.length; j++) {
-      const id = pool.skillIds[j]
-      if (!isLearned(id)) {
-        if (LATE_GAME_SKILL_IDS.indexOf(id) >= 0) {
-          if (Math.random() < lateGameChance) available.push(id)
-        } else {
-          available.push(id)
-        }
-      }
+  // 经典狂暴战阶段：愤怒化身已激活时，池子 = 未选钥匙卡 + 已展开各线当前层技能
+  if (isClassicFuryPoolActive()) {
+    available = buildClassicFuryPool()
+    for (let i = available.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[available[i], available[j]] = [available[j], available[i]]
     }
+    const n = Math.min(3, available.length)
+    skill_choices = available.slice(0, n)
+    skill_choice_count = n
+    return
   }
-  skill_choices = []
-  const n = Math.min(3, available.length)
-  for (let i = 0; i < n; i++) {
-    const j = i + Math.floor(Math.random() * (available.length - i))
+  // 愤怒化身未激活前：只出现组成愤怒化身的 4 张卡（嗜血、怒击、暴怒、旋风斩），不出现斩杀与任何进阶池
+  const furyAvatarSkillIds = [3, 4, 5, 6]
+  available = furyAvatarSkillIds.filter(id => !isLearned(id))
+  for (let i = available.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
     ;[available[i], available[j]] = [available[j], available[i]]
-    skill_choices.push(available[i])
   }
+  const n = Math.min(3, available.length)
+  skill_choices = available.slice(0, n)
   skill_choice_count = n
 }
 
@@ -1734,13 +1970,23 @@ function chooseSkill(index) {
     choosingSkillByInspiration = false
   }
   const id = skill_choices[index]
+  if (isKeyCardId(id)) {
+    pickedKeyCardIds.push(id)
+    tryGrantDualWielderWeapon()
+    gameState = 'playing'
+    return
+  }
   if (getEffectiveSlotsUsed() >= MAX_SKILL_SLOTS) {
     pendingReplaceSkillId = id
     gameState = 'choosing_replace_target'
     return
   }
+  const skillsInSlotsBefore = getSkillsInSlots()
+  const slotRects = getSkillBarSlotRects(gameWidth)
+  const chosenCardRect = (index >= 0 && index < skillChoiceRects.length) ? skillChoiceRects[index] : null
   learned_skill_ids.push(id)
   recordDevourTimersOnLearn(id)
+  tryStartDevourAnimation(skillsInSlotsBefore, slotRects, gameWidth, gameHeight, id, chosenCardRect)
   tryGrantDualWielderWeapon()
   gameState = 'playing'
 }
@@ -1765,6 +2011,7 @@ function tryGrantDualWielderWeapon() {
 
 function replaceSkillAtSlot(slotIndex) {
   if (gameState !== 'choosing_replace_target' || pendingReplaceSkillId == null) return
+  if (isKeyCardId(pendingReplaceSkillId)) return
   const toRemove = getSkillIdAtSlot(slotIndex)
   if (toRemove == null) return
   if (choosingSkillByInspiration) {
@@ -1774,10 +2021,14 @@ function replaceSkillAtSlot(slotIndex) {
     skillLearnCount++
     choosingSkillByInspiration = false
   }
+  const skillsInSlotsBefore = getSkillsInSlots()
+  const slotRects = getSkillBarSlotRects(gameWidth)
+  const replacedSlotRect = (slotIndex >= 0 && slotIndex < replaceSlotRects.length) ? replaceSlotRects[slotIndex] : null
   learned_skill_ids = learned_skill_ids.filter(sid => sid !== toRemove)
   const id = pendingReplaceSkillId
   learned_skill_ids.push(id)
   recordDevourTimersOnLearn(id)
+  tryStartDevourAnimation(skillsInSlotsBefore, slotRects, gameWidth, gameHeight, id, replacedSlotRect)
   tryGrantDualWielderWeapon()
   pendingReplaceSkillId = null
   gameState = 'playing'
@@ -1878,6 +2129,8 @@ function resetGame() {
   kuangLuanBuffRemaining = 0
   skillOdinCd = 0
   deathReviveUsed = false
+  synergyDevourAnimationPlayed = {}
+  devourFloatingCards = []
   challengeCount = 0
   challengeTimer = 0
   gameEnded = false
@@ -1892,6 +2145,7 @@ function resetGame() {
   playerExpToNext = BASE_EXP_TO_NEXT
   levelUpDelayRemaining = 0
   learned_skill_ids = []
+  pickedKeyCardIds = []
   skill_choices = []
   skill_choice_count = 0
   skillRefreshChances = 0
@@ -2211,10 +2465,64 @@ wx.onTouchEnd(function (e) {
     if (hitTest(x, y, titleNewRect)) {
       try { wx.removeStorageSync(SAVE_KEY) } catch (e) {}
       resetGame()
-      gameState = 'playing'
+      const introVideoEl = (typeof document !== 'undefined' && document.getElementById('intro-video')) || null
+      if (INTRO_VIDEO_URL && introVideoEl) {
+        introUseVideo = true
+        gameState = 'intro'
+        introVideoEl.style.display = 'block'
+        introVideoEl.currentTime = 0
+        introVideoEl.onended = function () {
+          introVideoEl.style.display = 'none'
+          introVideoEl.onended = null
+          introVideoEl.onerror = null
+          introVideoEl.oncanplaythrough = null
+          introUseVideo = false
+          gameState = 'playing'
+        }
+        introVideoEl.onerror = function () {
+          introVideoEl.style.display = 'none'
+          introVideoEl.onended = null
+          introVideoEl.onerror = null
+          introVideoEl.oncanplaythrough = null
+          introUseVideo = false
+          gameState = 'playing'
+        }
+        introVideoEl.oncanplaythrough = function () {
+          introVideoEl.oncanplaythrough = null
+          introVideoEl.play().catch(function () {
+            introVideoEl.onended && introVideoEl.onended()
+          })
+        }
+        introVideoEl.src = getIntroVideoSrc()
+        introVideoEl.load()
+        if (introVideoEl.readyState >= 3) introVideoEl.oncanplaythrough()
+        else introVideoEl.play().catch(function () {})
+      } else if (INTRO_DURATION > 0) {
+        introUseVideo = false
+        gameState = 'intro'
+        introTimer = INTRO_DURATION
+      } else {
+        gameState = 'playing'
+      }
     } else if (titleContinueRect && hitTest(x, y, titleContinueRect)) {
       loadGame()
       gameState = 'playing'
+    }
+    return
+  }
+  if (gameState === 'intro') {
+    // 点击/触摸可跳过开场动画
+    if (introUseVideo) {
+      const introVideoEl = typeof document !== 'undefined' && document.getElementById('intro-video')
+      if (introVideoEl) {
+        introVideoEl.pause()
+        introVideoEl.style.display = 'none'
+        introVideoEl.onended = null
+      }
+      introUseVideo = false
+      gameState = 'playing'
+    } else {
+      introTimer = 0
     }
     return
   }
@@ -2239,6 +2547,26 @@ function loop(timestamp) {
 
   if (gameState === 'title') {
     drawTitleScreen(w, h)
+    requestAnimationFrame(loop)
+    return
+  }
+
+  if (gameState === 'intro') {
+    if (introUseVideo) {
+      const introVideoEl = typeof document !== 'undefined' && document.getElementById('intro-video')
+      if (introVideoEl && introVideoEl.ended) {
+        introVideoEl.style.display = 'none'
+        introUseVideo = false
+        gameState = 'playing'
+      }
+    } else {
+      introTimer -= dt
+      if (introTimer <= 0) {
+        introTimer = 0
+        gameState = 'playing'
+      }
+    }
+    drawIntroScreen(w, h)
     requestAnimationFrame(loop)
     return
   }
@@ -2312,7 +2640,7 @@ function loop(timestamp) {
     const cb = getChallengeBoss()
     if (!cb) {
       const rewardStage = Math.floor((challengeCount + 1) / 5)
-      const reward = Math.floor(CHALLENGE_GOLD_BASE * Math.pow(CHALLENGE_GOLD_MUL, rewardStage))
+      const reward = Math.min(CHALLENGE_REWARD_CAP, Math.floor(CHALLENGE_GOLD_BASE * Math.pow(CHALLENGE_GOLD_MUL, rewardStage)))
       playerGold += reward
       giveInspiration(reward)
       challengeCount++
@@ -2475,9 +2803,14 @@ function loop(timestamp) {
     if (drawerSlideProgress <= 0) drawerSlideProgress = 0
   }
   if (weaponGrantToastRemaining > 0) weaponGrantToastRemaining = Math.max(0, weaponGrantToastRemaining - dt)
+  for (let i = devourFloatingCards.length - 1; i >= 0; i--) {
+    devourFloatingCards[i].progress += dt / DEVOUR_FLOAT_DURATION
+    if (devourFloatingCards[i].progress >= 1) devourFloatingCards.splice(i, 1)
+  }
 
   drawGame(w, h)
   drawPanel(w, h)
+  if (devourFloatingCards.length > 0) drawDevourFloatingCards(w, h)
   drawBottomDrawer(w, h)
   drawTabBar(w, h)
   if (damageStatsOverlayOpen) drawDamageStatsOverlay(w, h)
@@ -2529,6 +2862,38 @@ function drawTitleScreen(w, h) {
   } else {
     titleContinueRect = null
   }
+  ctx.textAlign = 'left'
+  ctx.textBaseline = 'alphabetic'
+}
+
+// 开场动画：用视频时只画背景（视频叠在上层），否则画 canvas 动画
+function drawIntroScreen(w, h) {
+  ctx.fillStyle = UI.bg
+  ctx.fillRect(0, 0, w, h)
+  if (introUseVideo) {
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'
+    ctx.font = '12px sans-serif'
+    ctx.fillText('点击屏幕跳过', w / 2, h * 0.92)
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'alphabetic'
+    return
+  }
+  const progress = INTRO_DURATION > 0 ? Math.min(1, 1 - introTimer / INTRO_DURATION) : 1
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const fade1 = Math.min(1, progress * 2)
+  const fade2 = Math.max(0, Math.min(1, (progress - 0.4) / 0.4))
+  ctx.fillStyle = 'rgba(245, 158, 11, ' + fade1 + ')'
+  ctx.font = 'bold 28px sans-serif'
+  ctx.fillText('塔防 Roguelike', w / 2, h * 0.35)
+  ctx.fillStyle = 'rgba(255, 255, 255, ' + fade2 * 0.8 + ')'
+  ctx.font = '14px sans-serif'
+  ctx.fillText('准备战斗…', w / 2, h * 0.48)
+  ctx.fillStyle = 'rgba(255, 255, 255, ' + fade2 * 0.5 + ')'
+  ctx.font = '12px sans-serif'
+  ctx.fillText('点击屏幕跳过', w / 2, h * 0.92)
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
 }
@@ -2652,15 +3017,19 @@ function drawSkillChoiceOverlay(w, h) {
     const filled = skillsInSlots[i]
     roundRect(sx, sy, slotW, slotH, UI.radiusSm)
     if (filled) {
+      const slotLineColor = getCardLineColor(filled.skillId)
       ctx.fillStyle = filled.isAdvanced ? UI.bgCardAlt : UI.bgCard
       ctx.fill()
-      ctx.strokeStyle = filled.isAdvanced ? UI.primary : UI.border
+      ctx.fillStyle = slotLineColor
+      ctx.fillRect(sx, sy, slotW, Math.min(8, slotH / 4))
+      ctx.strokeStyle = slotLineColor
       ctx.lineWidth = 1
+      roundRect(sx, sy, slotW, slotH, UI.radiusSm)
       ctx.stroke()
       const nameY = 18
       const nameFontSize = filled.name.length > 6 ? 9 : (filled.name.length > 4 ? 10 : 11)
       ctx.font = nameFontSize + 'px sans-serif'
-      ctx.fillStyle = filled.isAdvanced ? UI.primary : UI.text
+      ctx.fillStyle = filled.isAdvanced ? slotLineColor : UI.text
       ctx.fillText(filled.name, sx + slotW / 2, sy + nameY)
       const progressList = getSynergyProgressForSkill(filled.skillId)
       if (progressList.length > 0) {
@@ -2706,55 +3075,71 @@ function drawSkillChoiceOverlay(w, h) {
   const cardY = y
   skillChoiceRects = []
   const allSkills = getAllSkills()
+  const topBarH = 22
   for (let i = 0; i < skill_choice_count; i++) {
     const x = 16 + i * (16 + cardW)
     const id = skill_choices[i]
-    const isAdvanced = id > 7
+    const isKeyCard = isKeyCardId(id)
+    const isAdvanced = !isKeyCard && id > 7
+    const lineColor = getCardLineColor(id)
+    const topBarText = getCardTopBarText(id)
     roundRect(x, cardY, cardW, cardH, UI.radiusSm)
-    ctx.fillStyle = isAdvanced ? UI.bgCardAlt : UI.bgCard
+    ctx.fillStyle = (isKeyCard || isAdvanced) ? UI.bgCardAlt : UI.bgCard
     ctx.fill()
-    let cardStroke = isAdvanced ? UI.primary : UI.border
-    if (id === SKILL_LUMANG_ID) cardStroke = UI.danger
-    ctx.strokeStyle = cardStroke
+    ctx.fillStyle = lineColor
+    ctx.fillRect(x, cardY, cardW, topBarH)
+    ctx.fillStyle = '#fff'
+    ctx.font = 'bold 11px sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(topBarText, x + cardW / 2, cardY + 14)
+    ctx.strokeStyle = lineColor
     ctx.lineWidth = 1.5
+    roundRect(x, cardY, cardW, cardH, UI.radiusSm)
     ctx.stroke()
-    const sk = allSkills[id]
-    if (isAdvanced) {
-      const poolName = getAdvancedPoolName(id)
-      ctx.fillStyle = UI.primary
-      ctx.font = '10px sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText(poolName ? poolName + '·进阶' : '进阶', x + cardW / 2, cardY + 14)
-    }
-    ctx.fillStyle = isAdvanced ? UI.primary : UI.text
-    ctx.font = 'bold 14px sans-serif'
-    ctx.fillText(sk.name, x + cardW / 2, cardY + (isAdvanced ? 28 : 26))
-    ctx.fillStyle = UI.textDim
-    ctx.font = '10px sans-serif'
-    const descText = sk.desc != null ? sk.desc : ('攻×' + sk.attackMul + ' 速×' + sk.speedMul)
-    const descPadding = 8
-    const descMaxW = Math.max(0, cardW - descPadding * 2)
-    const descLineH = 12
-    const descMaxLines = 14
-    const descStartY = cardY + 40
-    fillTextWrapped(descText, x + cardW / 2, descStartY, descMaxW, descLineH, descMaxLines)
-    const belongTo = getSynergiesForSkill(id)
-    const canActivate = getSynergiesIfChoose(id)
-    let lineY = cardY + 40 + descMaxLines * descLineH + 4
-    ctx.fillStyle = UI.textMuted
-    ctx.font = '10px sans-serif'
-    const ruleText = getDevourRuleText(id)
-    fillTextWrapped(ruleText, x + cardW / 2, lineY, descMaxW, 12, 4)
-    lineY += 12 * 4 + 2
-    if (belongTo.length > 0) {
+    if (isKeyCard) {
+      ctx.fillStyle = UI.text
+      ctx.font = 'bold 14px sans-serif'
+      ctx.fillText(getKeyCardDisplayName(id), x + cardW / 2, cardY + topBarH + 14)
       ctx.fillStyle = UI.textDim
-      ctx.fillText('所属吞噬：' + belongTo.join('、'), x + cardW / 2, lineY)
-      lineY += 14
-    }
-    if (canActivate.length > 0) {
-      ctx.fillStyle = UI.success
-      ctx.font = '11px sans-serif'
-      ctx.fillText('选此可激活：' + canActivate.join('、'), x + cardW / 2, lineY)
+      ctx.font = '10px sans-serif'
+      const descPadding = 8
+      const descMaxW = Math.max(0, cardW - descPadding * 2)
+      const descLineH = 12
+      const descMaxLines = 14
+      const descStartY = cardY + topBarH + 26
+      fillTextWrapped(getKeyCardDesc(id), x + cardW / 2, descStartY, descMaxW, descLineH, descMaxLines)
+    } else {
+      const sk = allSkills[id]
+      ctx.fillStyle = isAdvanced ? lineColor : UI.text
+      ctx.font = 'bold 14px sans-serif'
+      ctx.fillText(sk.name, x + cardW / 2, cardY + topBarH + 14)
+      ctx.fillStyle = UI.textDim
+      ctx.font = '10px sans-serif'
+      const descText = sk.desc != null ? sk.desc : ('攻×' + sk.attackMul + ' 速×' + sk.speedMul)
+      const descPadding = 8
+      const descMaxW = Math.max(0, cardW - descPadding * 2)
+      const descLineH = 12
+      const descMaxLines = 14
+      const descStartY = cardY + topBarH + 26
+      fillTextWrapped(descText, x + cardW / 2, descStartY, descMaxW, descLineH, descMaxLines)
+      const belongTo = getSynergiesForSkill(id)
+      const canActivate = getSynergiesIfChoose(id)
+      let lineY = cardY + topBarH + 26 + descMaxLines * descLineH + 4
+      ctx.fillStyle = UI.textMuted
+      ctx.font = '10px sans-serif'
+      const ruleText = getDevourRuleText(id)
+      fillTextWrapped(ruleText, x + cardW / 2, lineY, descMaxW, 12, 4)
+      lineY += 12 * 4 + 2
+      if (belongTo.length > 0) {
+        ctx.fillStyle = UI.textDim
+        ctx.fillText('所属吞噬：' + belongTo.join('、'), x + cardW / 2, lineY)
+        lineY += 14
+      }
+      if (canActivate.length > 0) {
+        ctx.fillStyle = UI.success
+        ctx.font = '11px sans-serif'
+        ctx.fillText('选此可激活：' + canActivate.join('、'), x + cardW / 2, lineY)
+      }
     }
     skillChoiceRects.push({ x, y: cardY, w: cardW, h: cardH })
   }
@@ -2857,16 +3242,18 @@ function drawReplaceTargetOverlay(w, h) {
     const filled = skillsInSlots[i]
     roundRect(sx, sy, slotW, slotH, UI.radiusSm)
     if (filled) {
+      const replaceLineColor = getCardLineColor(filled.skillId)
       ctx.fillStyle = filled.isAdvanced ? UI.bgCardAlt : UI.bgCard
       ctx.fill()
-      let replaceStroke = filled.isAdvanced ? UI.primary : UI.border
-      if (filled.skillId === SKILL_LUMANG_ID) replaceStroke = UI.danger
-      ctx.strokeStyle = replaceStroke
+      ctx.fillStyle = replaceLineColor
+      ctx.fillRect(sx, sy, slotW, Math.min(8, slotH / 4))
+      ctx.strokeStyle = replaceLineColor
       ctx.lineWidth = 1
+      roundRect(sx, sy, slotW, slotH, UI.radiusSm)
       ctx.stroke()
       const nameFontSize = filled.name.length > 6 ? 9 : (filled.name.length > 4 ? 10 : 11)
       ctx.font = nameFontSize + 'px sans-serif'
-      ctx.fillStyle = filled.isAdvanced ? UI.primary : UI.text
+      ctx.fillStyle = filled.isAdvanced ? replaceLineColor : UI.text
       ctx.fillText(filled.name, sx + slotW / 2, sy + 18)
       const progressList = getSynergyProgressForSkill(filled.skillId)
       if (progressList.length > 0) {
@@ -3292,8 +3679,9 @@ function drawPanel(w, h) {
     const filled = skillsInSlots[i]
     roundRect(sx, sy, slotW, slotH, UI.radiusSm)
     if (filled) {
+      const slotLineColor = getCardLineColor(filled.skillId)
       let slotBg = filled.isAdvanced ? UI.bgCardAlt : UI.bgCard
-      let slotStroke = filled.isAdvanced ? UI.primary : UI.border
+      let slotStroke = slotLineColor
       let activeCd = 0
       let activeCdMax = 1
       let activeBuff = false
@@ -3353,9 +3741,10 @@ function drawPanel(w, h) {
           slotStroke = '#a78bfa'
         }
       }
-      if (filled.skillId === SKILL_LUMANG_ID) slotStroke = UI.danger
       ctx.fillStyle = slotBg
       ctx.fill()
+      ctx.fillStyle = slotLineColor
+      ctx.fillRect(sx, sy, slotW, Math.min(8, slotH / 4))
       ctx.strokeStyle = slotStroke
       ctx.lineWidth = 1.5
       ctx.stroke()
@@ -3376,7 +3765,7 @@ function drawPanel(w, h) {
       const nameY = filled.isActive ? 12 : 18
       const nameFontSize = filled.name.length > 6 ? 9 : (filled.name.length > 4 ? 10 : 11)
       ctx.font = nameFontSize + 'px sans-serif'
-      ctx.fillStyle = filled.isAdvanced ? UI.primary : (filled.isActive && activeCd > 0 ? UI.textMuted : UI.text)
+      ctx.fillStyle = filled.isAdvanced ? slotLineColor : (filled.isActive && activeCd > 0 ? UI.textMuted : UI.text)
       ctx.fillText(filled.name, sx + slotW / 2, sy + nameY)
       if (filled.isActive) {
         ctx.font = '9px sans-serif'
@@ -3486,6 +3875,43 @@ function drawPanel(w, h) {
 
 }
 
+function drawDevourFloatingCards(w, h) {
+  for (let i = 0; i < devourFloatingCards.length; i++) {
+    const card = devourFloatingCards[i]
+    const t = Math.min(1, card.progress)
+    const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+    const x = card.startX + (card.endX - card.startX) * ease
+    const floatY = 14 * Math.sin(t * Math.PI)
+    const y = card.startY + (card.endY - card.startY) * ease - floatY
+    const scale = 1 - t * 0.75
+    const cardW = Math.max(24, 56 * scale)
+    const cardH = Math.max(18, 40 * scale)
+    const left = x - cardW / 2
+    const top = y - cardH / 2
+    roundRect(left, top, cardW, cardH, UI.radiusSm)
+    ctx.fillStyle = UI.bgCardAlt
+    ctx.fill()
+    ctx.fillStyle = card.lineColor
+    ctx.fillRect(left, top, cardW, Math.min(12, cardH / 3))
+    ctx.strokeStyle = card.lineColor
+    ctx.lineWidth = 1.5
+    roundRect(left, top, cardW, cardH, UI.radiusSm)
+    ctx.stroke()
+    ctx.fillStyle = UI.text
+    ctx.font = (scale > 0.45 ? '10px' : '9px') + ' sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    const name = card.skillName.length > 4 ? (card.skillName.slice(0, 4) + '…') : card.skillName
+    ctx.fillText(name, x, y)
+  }
+}
+
+// 游戏 Tab 是否可提示（可打磨武器或可抽取技能时显示动态亮边）
+function canGameTabPrompt() {
+  if (gameState !== 'playing' && gameState !== 'wave_break') return false
+  return playerInspiration >= getLearnSkillCost() || playerGold >= getForgeWeaponCost()
+}
+
 function drawTabBar(w, h) {
   const tabBarTop = h - TAB_BAR_HEIGHT
   ctx.fillStyle = UI.bgPanel
@@ -3501,6 +3927,8 @@ function drawTabBar(w, h) {
   const tabW = w / TAB_IDS.length
   ctx.font = '12px sans-serif'
   ctx.textBaseline = 'middle'
+  const gameTabPrompt = canGameTabPrompt()
+  const dotPulse = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin((Date.now() / 400) * Math.PI * 2))
   for (let i = 0; i < TAB_IDS.length; i++) {
     const tx = i * tabW
     const active = bottomDrawerTab === TAB_IDS[i]
@@ -3511,6 +3939,15 @@ function drawTabBar(w, h) {
       ctx.strokeStyle = UI.primary
       ctx.lineWidth = 1
       ctx.stroke()
+    }
+    if (i === 0 && gameTabPrompt) {
+      const dotX = tx + tabW - 10
+      const dotY = tabBarTop + 10
+      const r = 4
+      ctx.beginPath()
+      ctx.arc(dotX, dotY, r, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(220, 38, 38, ' + dotPulse + ')'
+      ctx.fill()
     }
     ctx.fillStyle = active ? UI.primary : UI.text
     ctx.textAlign = 'center'

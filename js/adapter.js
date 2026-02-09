@@ -1,8 +1,11 @@
 // 微信小游戏 API 的 H5 适配层，使同一套 main.js 可在浏览器中运行
 (function () {
-  var gameCanvas = document.createElement('canvas')
-  gameCanvas.id = 'gamecanvas'
-  document.body.appendChild(gameCanvas)
+  var gameCanvas = document.getElementById('gamecanvas')
+  if (!gameCanvas) {
+    gameCanvas = document.createElement('canvas')
+    gameCanvas.id = 'gamecanvas'
+    document.body.appendChild(gameCanvas)
+  }
 
   function resize() {
     var w = window.innerWidth || 320
