@@ -619,6 +619,7 @@ const INTRO_DURATION = 2.5   // 新游戏开始前开场动画时长（秒），
 const INTRO_VIDEO_URL = 'intro.mp4'   // 填 mp4 路径则用视频做开场，留空则用 canvas 动画
 let introTimer = 0           // 开场动画剩余秒数，>0 时处于 intro 状态（未用视频时）
 let introUseVideo = false    // 本局开场是否使用视频
+let introVideoPreloaded = false  // 标题页是否已预加载过开场视频
 // 根据当前页面地址解析视频 URL，避免 GitHub Pages 子路径下 404
 function getIntroVideoSrc() {
   if (!INTRO_VIDEO_URL) return ''
@@ -626,6 +627,19 @@ function getIntroVideoSrc() {
   const path = window.location.pathname || '/'
   const dir = path.replace(/\/[^/]*$/, '/') || '/'
   return window.location.origin + dir + INTRO_VIDEO_URL.replace(/^\//, '')
+}
+// 开场视频加载进度 0～1，用于进度条；全部加载完才播放
+function getIntroVideoLoadProgress() {
+  if (typeof document === 'undefined') return 0
+  const el = document.getElementById('intro-video')
+  if (!el || !el.duration || el.duration <= 0 || !isFinite(el.duration)) return 0
+  const buf = el.buffered
+  if (!buf || buf.length === 0) return 0
+  const end = buf.end(buf.length - 1)
+  return Math.min(1, end / el.duration)
+}
+function isIntroVideoFullyLoaded() {
+  return getIntroVideoLoadProgress() >= 0.99
 }
 let playerLevel = 1
 let playerExp = 0
@@ -2475,7 +2489,6 @@ wx.onTouchEnd(function (e) {
           introVideoEl.style.display = 'none'
           introVideoEl.onended = null
           introVideoEl.onerror = null
-          introVideoEl.oncanplaythrough = null
           introUseVideo = false
           gameState = 'playing'
         }
@@ -2483,20 +2496,14 @@ wx.onTouchEnd(function (e) {
           introVideoEl.style.display = 'none'
           introVideoEl.onended = null
           introVideoEl.onerror = null
-          introVideoEl.oncanplaythrough = null
           introUseVideo = false
           gameState = 'playing'
         }
-        introVideoEl.oncanplaythrough = function () {
-          introVideoEl.oncanplaythrough = null
-          introVideoEl.play().catch(function () {
-            introVideoEl.onended && introVideoEl.onended()
-          })
+        if (!introVideoPreloaded) {
+          introVideoEl.src = getIntroVideoSrc()
+          introVideoEl.load()
         }
-        introVideoEl.src = getIntroVideoSrc()
-        introVideoEl.load()
-        if (introVideoEl.readyState >= 3) introVideoEl.oncanplaythrough()
-        else introVideoEl.play().catch(function () {})
+        if (isIntroVideoFullyLoaded()) introVideoEl.play().catch(function () {})
       } else if (INTRO_DURATION > 0) {
         introUseVideo = false
         gameState = 'intro'
@@ -2546,6 +2553,14 @@ function loop(timestamp) {
   updateLayout()
 
   if (gameState === 'title') {
+    if (!introVideoPreloaded && INTRO_VIDEO_URL && typeof document !== 'undefined') {
+      const preloadEl = document.getElementById('intro-video')
+      if (preloadEl) {
+        preloadEl.src = getIntroVideoSrc()
+        preloadEl.load()
+        introVideoPreloaded = true
+      }
+    }
     drawTitleScreen(w, h)
     requestAnimationFrame(loop)
     return
@@ -2558,6 +2573,8 @@ function loop(timestamp) {
         introVideoEl.style.display = 'none'
         introUseVideo = false
         gameState = 'playing'
+      } else if (introVideoEl && introVideoEl.paused && !introVideoEl.ended && isIntroVideoFullyLoaded()) {
+        introVideoEl.play().catch(function () {})
       }
     } else {
       introTimer -= dt
@@ -2873,6 +2890,31 @@ function drawIntroScreen(w, h) {
   if (introUseVideo) {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
+    const introVideoEl = typeof document !== 'undefined' && document.getElementById('intro-video')
+    const isLoading = introVideoEl && introVideoEl.paused && !introVideoEl.ended
+    const progress = getIntroVideoLoadProgress()
+    if (isLoading) {
+      ctx.fillStyle = UI.primary
+      ctx.font = '16px sans-serif'
+      ctx.fillText('加载中…', w / 2, h * 0.38)
+      const barW = Math.min(280, w * 0.8)
+      const barH = 12
+      const barX = (w - barW) / 2
+      const barY = h * 0.48
+      ctx.fillStyle = 'rgba(255,255,255,0.2)'
+      roundRect(barX, barY, barW, barH, 6)
+      ctx.fill()
+      ctx.fillStyle = UI.primary
+      roundRect(barX, barY, barW * Math.max(0, Math.min(1, progress)), barH, 6)
+      ctx.fill()
+      ctx.strokeStyle = UI.border
+      ctx.lineWidth = 1
+      roundRect(barX, barY, barW, barH, 6)
+      ctx.stroke()
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.font = '14px sans-serif'
+      ctx.fillText(Math.round(progress * 100) + '%', w / 2, barY + barH + 22)
+    }
     ctx.fillStyle = 'rgba(255,255,255,0.5)'
     ctx.font = '12px sans-serif'
     ctx.fillText('点击屏幕跳过', w / 2, h * 0.92)
